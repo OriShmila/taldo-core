@@ -92,7 +92,8 @@ pub fn b64url(b: &[u8]) -> String {
 /// signature at all
 pub fn canonical_sig(sig: &str) -> Option<String> {
     let bytes = unhex(sig)?;
-    let s = if bytes.len() == 64 { Signature::from_slice(&bytes).ok()? } else { Signature::from_der(&bytes).ok()? };
+    // read as the signer reads it: DER first, then the plain r‖s — so a DER signature that happens to be 64 bytes is read the same here
+    let s = Signature::from_der(&bytes).or_else(|_| Signature::from_slice(&bytes)).ok()?;
     Some(b64hex(&s.normalize_s().to_bytes()))
 }
 /// THE KEY THAT SIGNED the entry's act, and whether a person was there — or why none did
