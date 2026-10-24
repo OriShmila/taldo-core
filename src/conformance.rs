@@ -61,7 +61,14 @@ pub fn files(f: &dyn Files, prefix: &str) -> Result<(), String> {
 /// it is released — rows only ever above the last, and every entry read back exactly: by its number, in pages either way, and by
 /// its signature
 pub fn store(s: &dyn Store) -> Result<(), String> {
-    let e = |g: i64| serde_json::json!({ "g": g, "is": "be", "sig": { "sig": format!("sig{g}") }, "value": { "n": g } });
+    // each entry signed for real, its signature written in upper case: a store finds it by the signature's standard spelling
+    let sig = |g: i64| -> String {
+        use p256::ecdsa::signature::Signer;
+        let k = p256::ecdsa::SigningKey::from_slice(&<sha2::Sha256 as sha2::Digest>::digest(format!("store {g}").as_bytes())).expect("a key");
+        let s: p256::ecdsa::Signature = k.sign(b"an entry");
+        s.to_bytes().iter().map(|x| format!("{x:02X}")).collect()
+    };
+    let e = |g: i64| serde_json::json!({ "g": g, "is": "be", "sig": { "sig": sig(g) }, "value": { "n": g } });
     refused(s.append("a", &[e(1)]), "appending with no lease")?;
     ok(s.lease("a"), "take the lease")?;
     ok(s.lease("a"), "the same holder taking it again")?;
@@ -77,8 +84,9 @@ pub fn store(s: &dyn Store) -> Result<(), String> {
     if gs(s.page(1, 5, false, 10)) != vec![1, 2, 5] || gs(s.page(1, 5, true, 2)) != vec![5, 2] {
         return Err("pages did not come back in order, or past their limit".into());
     }
-    if s.signed("sig2") != Some(2) || s.signed("nobody").is_some() {
-        return Err("an entry was not found by its signature".into());
+    let standard = crate::identity::canonical_sig(&sig(2)).expect("a signature");
+    if s.signed(&standard) != Some(2) || s.signed(&crate::identity::canonical_sig(&sig(3)).expect("a signature")).is_some() {
+        return Err("an entry was not found by its signature's standard spelling (identity::canonical_sig)".into());
     }
     refused(s.put_state("b", b"s"), "writing the state without the lease")?;
     ok(s.put_state("a", b"state 1"), "write the state")?;

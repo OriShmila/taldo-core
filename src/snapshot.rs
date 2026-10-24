@@ -261,7 +261,8 @@ impl Twin {
             let g = r.i()?;
             t.arrivals.insert(g, r.i()?);
         }
-        t.erased = (0..r.n()?).map(|_| r.s()).collect::<Result<_, _>>()?;
+        // what was erased, in its standard spelling — a state kept before signatures had one is read into it
+        t.erased = (0..r.n()?).map(|_| r.s().map(|x| crate::identity::canonical_sig(&x).unwrap_or(x))).collect::<Result<_, _>>()?;
         let names: Vec<String> = (0..r.n()?).map(|_| r.s()).collect::<Result<_, _>>()?;
         let len = r.n()?;
         let mut kinds: Vec<u32> = Vec::with_capacity(len.min(1 << 26));

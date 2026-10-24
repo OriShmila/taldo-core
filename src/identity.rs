@@ -86,6 +86,15 @@ pub fn b64url(b: &[u8]) -> String {
     out
 }
 
+/// A SIGNATURE IN ITS ONE STANDARD SPELLING: the same signature can be written several ways that all verify — upper or lower case
+/// hex, DER or the plain r‖s, and its mirror (r, n−s) — so what was already taken is recognised by this spelling, never by the text
+/// as written: decoded whatever its form, its s made the low one, written as plain r‖s in lower-case hex. None for what is no
+/// signature at all
+pub fn canonical_sig(sig: &str) -> Option<String> {
+    let bytes = unhex(sig)?;
+    let s = if bytes.len() == 64 { Signature::from_slice(&bytes).ok()? } else { Signature::from_der(&bytes).ok()? };
+    Some(b64hex(&s.normalize_s().to_bytes()))
+}
 /// THE KEY THAT SIGNED the entry's act, and whether a person was there — or why none did
 fn signer(e: &Value) -> Result<(String, bool), String> {
     let p = &e["sig"];
@@ -203,8 +212,8 @@ pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<bool, String> {
 /// A REQUEST SIGNED AS AN ACT: a screen or an agent proves who makes a request the way every entry proves who wrote it — the act
 /// `{ by, at: by, is: "request", value: { method, path, body (its sha256, hex) }, ts }` signed with a key that signs for `by`. Nothing
 /// is recorded for it; the same rule holds it. Taken only when the act names this very request, was made within `window` ms of
-/// `now` (either way), and its signature is not one of `seen` — so a request can be neither changed nor replayed. Who made it — or why
-/// not
+/// `now` (either way), and its signature, in its standard spelling (`canonical_sig`), is not one of `seen` — so a request can be
+/// neither changed nor replayed, however its signature is written. Who made it — or why not
 pub fn requested_by(
     t: &Twin,
     act: &Value,
@@ -227,7 +236,9 @@ pub fn requested_by(
         return Err(format!("the signed request is from {ts}, not within {window} ms of now ({now})"));
     }
     let sig = act["sig"]["sig"].as_str().ok_or("the request is not signed")?;
-    if seen(sig) {
+    // SEEN BY ITS STANDARD SPELLING: the same request signed once, written another way, is the same request
+    let sig = canonical_sig(sig).ok_or("its signature is not a signature")?;
+    if seen(&sig) {
         return Err("this signed request was made already".into());
     }
     verify(t, act, now)?;

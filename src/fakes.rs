@@ -94,7 +94,8 @@ impl crate::rows::Source for FakeStore {
         if newest_first { it.rev().take(limit).collect() } else { it.take(limit).collect() }
     }
     fn signed(&self, sig: &str) -> Option<i64> {
-        self.rows.lock().unwrap().iter().find(|(_, v)| v["sig"]["sig"].as_str() == Some(sig)).map(|(g, _)| *g)
+        // found by the standard spelling of each kept entry's signature, as every source finds it
+        self.rows.lock().unwrap().iter().find(|(_, v)| v["sig"]["sig"].as_str().and_then(crate::identity::canonical_sig).as_deref() == Some(sig)).map(|(g, _)| *g)
     }
 }
 impl Store for FakeStore {

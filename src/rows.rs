@@ -13,7 +13,8 @@ pub trait Source: Send + Sync {
     fn entry(&self, g: i64) -> Option<Value>;
     /// the entries numbered from `from` to `to` (both included), oldest first or newest first, at most `limit` of them
     fn page(&self, from: i64, to: i64, newest_first: bool, limit: usize) -> Vec<(i64, Value)>;
-    /// the number of the entry taken with this signature, if one was
+    /// the number of the entry taken with this signature — in its standard spelling (`identity::canonical_sig`): a source keeps each
+    /// entry findable by that spelling — if one was
     fn signed(&self, sig: &str) -> Option<i64>;
     /// the entries whose value has the detail `field` (not null), oldest first — when the source keeps an index of it; else none, and
     /// the entries are walked

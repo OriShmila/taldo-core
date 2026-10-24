@@ -113,7 +113,7 @@ pub struct Twin {
     pub(crate) signatures: BTreeSet<String>,
     /// the entries signed with a person there (`identity`) — a fact for holds to read, never required here
     pub(crate) present: BTreeSet<i64>,
-    /// the signatures of every act a purge erased: never taken again
+    /// the signatures of every act a purge erased, in their standard spelling: never taken again
     pub(crate) erased: BTreeSet<String>,
     /// when each take-over arrived: its key signs a day after
     pub(crate) arrivals: BTreeMap<i64, i64>,
@@ -456,7 +456,8 @@ impl Twin {
             Ok(p) => p,
             Err(why) => return Err(json!({ "g": e["g"], "why": why })),
         };
-        if let Some(s) = e["sig"]["sig"].as_str() {
+        // TAKEN ONCE, recognised by its signature's standard spelling: the same act signed once, written another way, is the same act
+        if let Some(s) = e["sig"]["sig"].as_str().and_then(crate::identity::canonical_sig).as_deref() {
             let taken = match self.entries.source() {
                 None => self.signatures.contains(s),
                 Some(src) => src
@@ -667,8 +668,8 @@ impl Twin {
             self.arrivals.insert(e["g"].as_i64().unwrap_or(0), arrived);
         }
         if self.entries.source().is_none() {
-            if let Some(s) = e["sig"]["sig"].as_str() {
-                self.signatures.insert(s.to_string());
+            if let Some(s) = e["sig"]["sig"].as_str().and_then(crate::identity::canonical_sig) {
+                self.signatures.insert(s);
             }
         }
         let (by, at) = (id_of(&e["by"]), id_of(&e["at"]));
@@ -691,7 +692,7 @@ impl Twin {
         touched.insert(by.clone());
         self.entries.insert(g, e);
         if e["is"] == "purge" {
-            self.erased.extend(e["value"]["sigs"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from));
+            self.erased.extend(e["value"]["sigs"].as_array().into_iter().flatten().filter_map(Value::as_str).filter_map(crate::identity::canonical_sig));
         }
         self.nodes.get_mut(&by).unwrap().by.push(g);
         self.nodes.get_mut(&at).unwrap().at.push(g);
