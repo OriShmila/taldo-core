@@ -33,6 +33,19 @@ fn fake_machine_conforms() {
     conformance::machine(&m, "t", "forever", &|| m.kept("t").unwrap().value, &|| {}, &|_| {}).unwrap();
 }
 #[test]
+fn fake_machine_sleeps_and_wakes() {
+    // the fake's program counts at every pass of time, while it is kept and awake
+    let m = FakeMachine::default();
+    let n = std::cell::Cell::new(0u64);
+    let beats = || m.kept("t").unwrap().value.then(|| n.get());
+    let pass = |_| {
+        if m.kept("t").unwrap().value && !m.asleep("t").unwrap().value {
+            n.set(n.get() + 1);
+        }
+    };
+    conformance::machine_sleep(&m, "t", "forever", &beats, &pass).unwrap();
+}
+#[test]
 fn fake_keys_conform() {
     conformance::keys(&FakeKeys::default(), "a test key").unwrap();
 }

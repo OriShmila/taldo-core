@@ -252,6 +252,7 @@ impl NetIn for FakeNetIn {
 #[derive(Default)]
 pub struct FakeMachine {
     kept: Mutex<BTreeMap<String, (String, Vec<String>)>>,
+    asleep: Mutex<std::collections::BTreeSet<String>>,
 }
 impl Machine for FakeMachine {
     fn keep_running(&self, name: &str, program: &str, args: &[String]) -> Answer<()> {
@@ -259,6 +260,7 @@ impl Machine for FakeMachine {
         done(())
     }
     fn stop_running(&self, name: &str) -> Answer<()> {
+        self.asleep.lock().unwrap().remove(name);
         match self.kept.lock().unwrap().remove(name) {
             Some(_) => done(()),
             None => fail("machine", "stop_running", format!("{name} is not kept running")),
@@ -266,6 +268,22 @@ impl Machine for FakeMachine {
     }
     fn kept(&self, name: &str) -> Answer<bool> {
         done(self.kept.lock().unwrap().contains_key(name))
+    }
+    fn sleep(&self, name: &str) -> Answer<()> {
+        if !self.kept.lock().unwrap().contains_key(name) {
+            return fail("machine", "sleep", format!("{name} is not kept running"));
+        }
+        self.asleep.lock().unwrap().insert(name.to_string());
+        done(())
+    }
+    fn wake(&self, name: &str) -> Answer<()> {
+        if !self.asleep.lock().unwrap().remove(name) {
+            return fail("machine", "wake", format!("{name} is not asleep"));
+        }
+        done(())
+    }
+    fn asleep(&self, name: &str) -> Answer<bool> {
+        done(self.asleep.lock().unwrap().contains(name))
     }
     fn whole(&self) -> Answer<Whole> {
         done(Whole { cpu: 12.0, cpus: 8, memory_used: 4 << 30, memory: 16 << 30, disk_free: 100 << 30, disk: 500 << 30 })

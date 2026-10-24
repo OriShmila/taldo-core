@@ -205,6 +205,47 @@ pub fn machine(m: &dyn Machine, name: &str, program: &str, runs: &dyn Fn() -> bo
     Ok(())
 }
 
+/// MACHINE, ASLEEP AND AWAKE: a program kept running that counts (`beats`: how far it has counted, None while it does not run) goes on
+/// counting; put to sleep it counts no further and reads as asleep, still kept; woken it counts again from where it was — never from
+/// the start (a wake that started it again is no wake); waking what is not asleep, and putting to sleep what is not kept, are refused
+pub fn machine_sleep(m: &dyn Machine, name: &str, program: &str, beats: &dyn Fn() -> Option<u64>, pass: &dyn Fn(u64)) -> Result<(), String> {
+    refused(m.sleep(name), "putting to sleep what is not kept")?;
+    ok(m.keep_running(name, program, &[]), "keep a program running")?;
+    let counting = |what: &str| -> Result<u64, String> {
+        let mut first = None;
+        for _ in 0..50 {
+            match (first, beats()) {
+                (None, Some(b)) => first = Some(b),
+                (Some(a), Some(b)) if b > a => return Ok(b),
+                _ => {}
+            }
+            pass(100);
+        }
+        Err(format!("the program did not count {what}"))
+    };
+    counting("when kept")?;
+    refused(m.wake(name), "waking what is not asleep")?;
+    ok(m.sleep(name), "put to sleep")?;
+    if !ok(m.asleep(name), "asleep")? || !ok(m.kept(name), "kept while asleep")? {
+        return Err("a program put to sleep does not read as asleep and still kept".into());
+    }
+    let at = beats().ok_or("a program asleep says nothing of how far it counted")?;
+    pass(1000);
+    if beats().is_some_and(|b| b > at) {
+        return Err("a program asleep went on counting".into());
+    }
+    ok(m.wake(name), "wake")?;
+    if ok(m.asleep(name), "asleep after waking")? {
+        return Err("a program woken still reads as asleep".into());
+    }
+    let after = counting("after waking")?;
+    if after < at {
+        return Err(format!("a program woken counted again from the start ({after} after {at}): it was started again, not woken"));
+    }
+    ok(m.stop_running(name), "stop running")?;
+    Ok(())
+}
+
 /// KEYS: a key made for a name is the same key every time it is asked for; what it signs, the twin takes as signed by the node that
 /// holds it — and by nobody else; a key forgotten signs nothing again. (A key that needs a person there is checked with one there:
 /// `presence` keys are not signed here)

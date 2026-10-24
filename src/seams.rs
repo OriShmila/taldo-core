@@ -239,6 +239,13 @@ pub trait Machine {
     fn stop_running(&self, name: &str) -> Answer<()>;
     /// whether the supervisor keeps `name` running
     fn kept(&self, name: &str) -> Answer<bool>;
+    /// ASLEEP: the program kept running as `name` put to sleep — nothing of it runs, all of it kept, so woken it goes on exactly where
+    /// it was (asleep is not stopped: the supervisor still keeps it). Refused for a name not kept
+    fn sleep(&self, name: &str) -> Answer<()>;
+    /// AWAKE AGAIN, where it was — refused for one not asleep
+    fn wake(&self, name: &str) -> Answer<()>;
+    /// whether `name` is asleep now
+    fn asleep(&self, name: &str) -> Answer<bool>;
     /// WHAT THE MACHINE HAS AND USES NOW, whole: its processors' use, its memory, its disk
     fn whole(&self) -> Answer<Whole>;
     /// what a group of processes uses now — a program and everything it started (`group`: its process group, or a job's own id)
