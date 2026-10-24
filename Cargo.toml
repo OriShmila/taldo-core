@@ -1,0 +1,26 @@
+[package]
+name = "taldo-core"
+version = "0.1.0"
+edition = "2021"
+description = "The core of Taldo: one signed record, permissions as grants, and the seams every environment must provide."
+repository = "https://github.com/OriShmila/taldo-core"
+readme = "README.md"
+license = "MIT"
+
+[dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }
+p256 = { version = "0.14", features = ["ecdsa"] }
+sha2 = "0.10"
+
+[lib]
+doctest = false
+
+[dev-dependencies]
+p256 = { version = "0.14", features = ["ecdsa"] }
+sha2 = "0.10"
+
+# the crypto libraries optimized even in test builds: every entry is a signature checked, and unoptimized they made the tests ten times slower
+[profile.dev.package."*"]
+opt-level = 3
+[profile.dev]
+opt-level = 1
