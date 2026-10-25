@@ -19,7 +19,7 @@ fn fake_clock_conforms() {
 #[test]
 fn fake_run_conforms() {
     let job = |p: String| Job { who: "t".into(), program: p, args: vec![], env: Default::default() };
-    conformance::run(&FakeRun::default(), &|c| job(format!("exit:{c}")), &|| job("forever".into()), &|_| {}).unwrap();
+    conformance::run(&FakeRun::default(), &|c| job(format!("exit:{c}")), &|s| job(format!("signal:{s}")), &|| job("forever".into()), &|_| {}).unwrap();
 }
 #[test]
 fn fake_net_in_conforms() {

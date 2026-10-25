@@ -145,7 +145,11 @@ pub struct Job {
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ended {
+    /// the code it ended with — none when a signal ended it
     pub code: Option<i32>,
+    /// THE SIGNAL THAT ENDED IT, when one did: 9 (SIGKILL) is what a machine sends what it runs when it runs out of memory — unless the
+    /// job was stopped. A job killed is said as killed, never as an end with no code
+    pub signal: Option<i32>,
     pub out_tail: String,
 }
 pub trait Run {

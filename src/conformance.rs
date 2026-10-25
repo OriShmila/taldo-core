@@ -120,15 +120,21 @@ pub fn clock(c: &dyn Clock, pass: &dyn Fn(u64)) -> Result<(), String> {
     Ok(())
 }
 
-/// RUN: a job that ends is seen ended with its code; one that runs is alive until stopped, and stopped is ended; the adapter lists
-/// only what still runs. `ends(code)` and `runs()` are jobs this environment can start
-pub fn run(r: &dyn Run, ends: &dyn Fn(i32) -> Job, runs: &dyn Fn() -> Job, pass: &dyn Fn(u64)) -> Result<(), String> {
+/// RUN: a job that ends is seen ended with its code, and one a signal killed is seen killed by that signal; one that runs is alive
+/// until stopped, and stopped is ended; the adapter lists only what still runs. `ends(code)`, `killed(signal)` and `runs()` are jobs
+/// this environment can start
+pub fn run(r: &dyn Run, ends: &dyn Fn(i32) -> Job, killed: &dyn Fn(i32) -> Job, runs: &dyn Fn() -> Job, pass: &dyn Fn(u64)) -> Result<(), String> {
     let a = ok(r.start(&ends(3)), "start a job that ends")?;
+    let k = ok(r.start(&killed(9)), "start a job that is killed")?;
     let b = ok(r.start(&runs()), "start a job that runs")?;
     pass(200);
     match ok(r.ended(a), "the ended job")? {
-        Some(e) if e.code == Some(3) => {}
+        Some(e) if e.code == Some(3) && e.signal.is_none() => {}
         other => return Err(format!("a job that ended with 3 reads {other:?}")),
+    }
+    match ok(r.ended(k), "the killed job")? {
+        Some(e) if e.signal == Some(9) && e.code.is_none() => {}
+        other => return Err(format!("a job killed by signal 9 reads {other:?}")),
     }
     if !ok(r.alive(b), "the running job")? || ok(r.ended(b), "the running job's end")?.is_some() {
         return Err("a running job did not read as running".into());

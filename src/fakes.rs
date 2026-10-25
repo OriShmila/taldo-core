@@ -182,7 +182,12 @@ impl Run for FakeRun {
     fn start(&self, job: &Job) -> Answer<u64> {
         let end = if let Some(c) = job.program.strip_prefix("exit:") {
             match c.parse::<i32>() {
-                Ok(code) => Some(Ended { code: Some(code), out_tail: String::new() }),
+                Ok(code) => Some(Ended { code: Some(code), signal: None, out_tail: String::new() }),
+                Err(_) => return fail("run", "start", format!("{} is no program here", job.program)),
+            }
+        } else if let Some(s) = job.program.strip_prefix("signal:") {
+            match s.parse::<i32>() {
+                Ok(signal) => Some(Ended { code: None, signal: Some(signal), out_tail: String::new() }),
                 Err(_) => return fail("run", "start", format!("{} is no program here", job.program)),
             }
         } else if job.program == "forever" {
@@ -205,7 +210,7 @@ impl Run for FakeRun {
         let mut j = self.jobs.lock().unwrap();
         match j.get_mut(&handle) {
             Some(e) => {
-                let end = e.clone().unwrap_or(Ended { code: None, out_tail: String::new() });
+                let end = e.clone().unwrap_or(Ended { code: None, signal: Some(9), out_tail: String::new() });
                 *e = Some(end.clone());
                 done(end)
             }
