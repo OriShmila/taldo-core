@@ -20,7 +20,7 @@ data, instead of taking our word for them.
 - **Who is asking.** A request from a screen or an agent is proven like an entry: signed for this exact method, path and body,
   within a window of now, never replayed.
 - **The seams.** The core never touches the world. It defines what an environment must provide (keys, files, storage, a clock,
-  network in and out, messages, rendering, the machine, outside sources, agents, versions, backup) and the conformance tests every
+  network in and out, messages, rendering, outside sources (the machine it runs on among them), agents, backup) and the conformance tests every
   implementation must pass. In-memory fakes pass them too, so the rules are tested in seconds.
 
 ## What it is not

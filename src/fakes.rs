@@ -252,62 +252,6 @@ impl NetIn for FakeNetIn {
     }
 }
 
-// ─── Machine: a supervisor in memory ───
-
-#[derive(Default)]
-pub struct FakeMachine {
-    kept: Mutex<BTreeMap<String, (String, Vec<String>)>>,
-    asleep: Mutex<std::collections::BTreeSet<String>>,
-}
-impl Machine for FakeMachine {
-    fn keep_running(&self, name: &str, program: &str, args: &[String]) -> Answer<()> {
-        self.kept.lock().unwrap().insert(name.to_string(), (program.to_string(), args.to_vec()));
-        done(())
-    }
-    fn stop_running(&self, name: &str) -> Answer<()> {
-        self.asleep.lock().unwrap().remove(name);
-        match self.kept.lock().unwrap().remove(name) {
-            Some(_) => done(()),
-            None => fail("machine", "stop_running", format!("{name} is not kept running")),
-        }
-    }
-    fn kept(&self, name: &str) -> Answer<bool> {
-        done(self.kept.lock().unwrap().contains_key(name))
-    }
-    fn sleep(&self, name: &str) -> Answer<()> {
-        if !self.kept.lock().unwrap().contains_key(name) {
-            return fail("machine", "sleep", format!("{name} is not kept running"));
-        }
-        self.asleep.lock().unwrap().insert(name.to_string());
-        done(())
-    }
-    fn wake(&self, name: &str) -> Answer<()> {
-        if !self.asleep.lock().unwrap().remove(name) {
-            return fail("machine", "wake", format!("{name} is not asleep"));
-        }
-        done(())
-    }
-    fn asleep(&self, name: &str) -> Answer<bool> {
-        done(self.asleep.lock().unwrap().contains(name))
-    }
-    fn whole(&self) -> Answer<Whole> {
-        done(Whole { cpu: 12.0, cpus: 8, memory_used: 4 << 30, memory: 16 << 30, disk_free: 100 << 30, disk: 500 << 30 })
-    }
-    fn using(&self, group: i64) -> Answer<Using> {
-        // a group the fake runs: what its kept programs are, by their number from 1
-        if group < 1 || group as usize > self.kept.lock().unwrap().len().max(1) {
-            return fail("machine", "using", format!("no group {group} runs"));
-        }
-        done(Using { cpu: 1.0, memory: 50 << 20, processes: 1 })
-    }
-    fn name(&self) -> Answer<String> {
-        done("a machine".into())
-    }
-    fn kind(&self) -> Answer<String> {
-        done("fake".into())
-    }
-}
-
 // ─── Keys: in memory, a person always there ───
 
 #[derive(Default)]
@@ -591,63 +535,6 @@ impl Identity for FakeIdentity {
             kept.push(at);
         }
         done(Proven { subject: name.to_string(), key: None, kept })
-    }
-}
-
-// ─── Version: commits put by the test, built once in memory ───
-
-/// VERSIONS IN MEMORY: commits put by the test (`commit`); one whose words say "fails" is built with a check that fails; each built once
-#[derive(Default)]
-pub struct FakeVersion {
-    commits: Mutex<Vec<(String, String)>>,
-    built: Mutex<BTreeMap<String, Built>>,
-    builds: Mutex<usize>,
-    /// what runs, the one before it last
-    taken: Mutex<Vec<String>>,
-}
-impl FakeVersion {
-    pub fn commit(&self, sha: &str, says: &str) {
-        self.commits.lock().unwrap().push((sha.to_string(), says.to_string()));
-    }
-    pub fn builds(&self) -> usize {
-        *self.builds.lock().unwrap()
-    }
-}
-impl Version for FakeVersion {
-    fn newest(&self) -> Answer<Option<(String, String)>> {
-        done(self.commits.lock().unwrap().last().cloned())
-    }
-    fn build(&self, commit: &str) -> Answer<Built> {
-        if let Some(b) = self.built.lock().unwrap().get(commit) {
-            return done(b.clone());
-        }
-        let says = self.commits.lock().unwrap().iter().find(|(c, _)| c == commit).map(|(_, s)| s.clone());
-        let Some(says) = says else { return fail("version", "build", format!("{commit} is no commit here")) };
-        *self.builds.lock().unwrap() += 1;
-        let b = Built { commit: commit.into(), kept: format!("kept/{commit}"), packages: vec![], ms: 1, checks: vec![("what Taldo must do".into(), !says.contains("fails"))] };
-        self.built.lock().unwrap().insert(commit.into(), b.clone());
-        done(b)
-    }
-    fn take(&self, commit: &str) -> Answer<()> {
-        match self.built.lock().unwrap().get(commit) {
-            None => fail("version", "take", format!("{commit} was not built")),
-            Some(b) if !b.holds() => fail("version", "take", format!("{commit} does not hold what Taldo must do")),
-            Some(_) => {
-                self.taken.lock().unwrap().push(commit.into());
-                done(())
-            }
-        }
-    }
-    fn back(&self) -> Answer<()> {
-        let mut t = self.taken.lock().unwrap();
-        if t.len() < 2 {
-            return fail("version", "back", "no version ran before this one".into());
-        }
-        t.pop();
-        done(())
-    }
-    fn running(&self) -> Answer<Option<String>> {
-        done(self.taken.lock().unwrap().last().cloned())
     }
 }
 

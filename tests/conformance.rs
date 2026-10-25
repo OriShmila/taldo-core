@@ -1,7 +1,7 @@
 //! THE FAKES PASS THE CONFORMANCE TESTS — so what holds on them holds on any adapter that passes them too.
 use taldo_core::conformance;
 use taldo_core::fakes::*;
-use taldo_core::seams::{Job, Keys, Machine};
+use taldo_core::seams::{Job, Keys};
 
 #[test]
 fn fake_files_conform() {
@@ -25,25 +25,6 @@ fn fake_run_conforms() {
 fn fake_net_in_conforms() {
     let n = FakeNetIn::default();
     conformance::net_in(&n, &|_, r| n.call(r)).unwrap();
-}
-#[test]
-fn fake_machine_conforms() {
-    // the fake's supervisor: what it keeps runs, at once and after any end
-    let m = FakeMachine::default();
-    conformance::machine(&m, "t", "forever", &|| m.kept("t").unwrap().value, &|| {}, &|_| {}).unwrap();
-}
-#[test]
-fn fake_machine_sleeps_and_wakes() {
-    // the fake's program counts at every pass of time, while it is kept and awake
-    let m = FakeMachine::default();
-    let n = std::cell::Cell::new(0u64);
-    let beats = || m.kept("t").unwrap().value.then(|| n.get());
-    let pass = |_| {
-        if m.kept("t").unwrap().value && !m.asleep("t").unwrap().value {
-            n.set(n.get() + 1);
-        }
-    };
-    conformance::machine_sleep(&m, "t", "forever", &beats, &pass).unwrap();
 }
 #[test]
 fn fake_keys_conform() {
@@ -85,21 +66,12 @@ fn fake_render_conforms() {
     conformance::render(&r, "fake://page", "fake://nowhere").unwrap();
 }
 #[test]
-fn fake_machine_use_conforms() {
-    conformance::machine_use(&FakeMachine::default(), 1, 99).unwrap();
-}
-#[test]
 fn fake_source_acts_for_someone() {
     // A MODEL IS A SOURCE: what it is asked, answered — a movement, asked of the record before and handed to it after
     let record = FakeRecord::default();
     let s = FakeSource::with_record(&record);
     let input = serde_json::json!({ "system": "Answer with exactly the one word asked for, nothing else.", "words": "Say the word: ready" });
     conformance::source_act(&s, "ask", &input, &|a| a["says"].as_str().is_some_and(|x| x.to_lowercase().contains("ready")), &|| record.happened.lock().unwrap().iter().map(|(m, _)| m.clone()).collect()).unwrap();
-}
-#[test]
-fn fake_version_conforms() {
-    let v = FakeVersion::default();
-    conformance::version(&v, &|sha, says| v.commit(sha, says), &|| v.builds()).unwrap();
 }
 #[test]
 fn fake_backup_conforms() {

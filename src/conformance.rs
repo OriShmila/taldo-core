@@ -179,79 +179,6 @@ pub fn net_in(n: &dyn NetIn, call: &dyn Fn(&str, Request) -> Result<Response, St
     Ok(())
 }
 
-/// MACHINE: a program kept running runs — and runs again after it ends — until it is stopped; then it no longer runs and is not
-/// started again. `program` is one this machine can run; `runs()` says whether it runs now; `end()` ends it the way a crash would;
-/// `pass` lets time pass
-pub fn machine(m: &dyn Machine, name: &str, program: &str, runs: &dyn Fn() -> bool, end: &dyn Fn(), pass: &dyn Fn(u64)) -> Result<(), String> {
-    ok(m.keep_running(name, program, &[]), "keep a program running")?;
-    let up = |what: &str| -> Result<(), String> {
-        for _ in 0..50 {
-            if runs() {
-                return Ok(());
-            }
-            pass(100);
-        }
-        Err(format!("the program kept running did not run {what}"))
-    };
-    up("when kept")?;
-    // THE SAME NAME AGAIN replaces what it runs, at once — as a new version of a program is handed to the supervisor
-    ok(m.keep_running(name, program, &[]), "keep the same name running again")?;
-    up("after the same name was kept again")?;
-    if !ok(m.kept(name), "kept")? {
-        return Err("a program kept running does not read as kept".into());
-    }
-    end();
-    up("again after it ended")?;
-    ok(m.stop_running(name), "stop running")?;
-    pass(500);
-    if runs() || ok(m.kept(name), "kept after stop")? {
-        return Err("a program still runs after it was stopped".into());
-    }
-    refused(m.stop_running(name), "stopping what is not kept")?;
-    Ok(())
-}
-
-/// MACHINE, ASLEEP AND AWAKE: a program kept running that counts (`beats`: how far it has counted, None while it does not run) goes on
-/// counting; put to sleep it counts no further and reads as asleep, still kept; woken it counts again from where it was — never from
-/// the start (a wake that started it again is no wake); waking what is not asleep, and putting to sleep what is not kept, are refused
-pub fn machine_sleep(m: &dyn Machine, name: &str, program: &str, beats: &dyn Fn() -> Option<u64>, pass: &dyn Fn(u64)) -> Result<(), String> {
-    refused(m.sleep(name), "putting to sleep what is not kept")?;
-    ok(m.keep_running(name, program, &[]), "keep a program running")?;
-    let counting = |what: &str| -> Result<u64, String> {
-        let mut first = None;
-        for _ in 0..50 {
-            match (first, beats()) {
-                (None, Some(b)) => first = Some(b),
-                (Some(a), Some(b)) if b > a => return Ok(b),
-                _ => {}
-            }
-            pass(100);
-        }
-        Err(format!("the program did not count {what}"))
-    };
-    counting("when kept")?;
-    refused(m.wake(name), "waking what is not asleep")?;
-    ok(m.sleep(name), "put to sleep")?;
-    if !ok(m.asleep(name), "asleep")? || !ok(m.kept(name), "kept while asleep")? {
-        return Err("a program put to sleep does not read as asleep and still kept".into());
-    }
-    let at = beats().ok_or("a program asleep says nothing of how far it counted")?;
-    pass(1000);
-    if beats().is_some_and(|b| b > at) {
-        return Err("a program asleep went on counting".into());
-    }
-    ok(m.wake(name), "wake")?;
-    if ok(m.asleep(name), "asleep after waking")? {
-        return Err("a program woken still reads as asleep".into());
-    }
-    let after = counting("after waking")?;
-    if after < at {
-        return Err(format!("a program woken counted again from the start ({after} after {at}): it was started again, not woken"));
-    }
-    ok(m.stop_running(name), "stop running")?;
-    Ok(())
-}
-
 /// KEYS: a key made for a name is the same key every time it is asked for; what it signs, the twin takes as signed by the node that
 /// holds it — and by nobody else; a key forgotten signs nothing again. (A key that needs a person there is checked with one there:
 /// `presence` keys are not signed here)
@@ -430,27 +357,6 @@ pub fn render(r: &dyn Render, at: &str, nowhere: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// WHAT A MACHINE USES: it says itself whole — some memory used of what it has, some disk free of what it has, its processors' use
-/// within what they can — and what a group that runs (`group`) uses, at least one process with some memory; a group that does not
-/// run is a Fail, never a zero; and which machine it is (a name and a kind)
-pub fn machine_use(m: &dyn Machine, group: i64, none: i64) -> Result<(), String> {
-    // WHICH MACHINE IT IS, said: a name and a kind, never empty
-    let (name, kind) = (ok(m.name(), "its name")?, ok(m.kind(), "its kind")?);
-    if name.trim().is_empty() || kind.trim().is_empty() {
-        return Err(format!("the machine said no name or no kind: {name:?}, {kind:?}"));
-    }
-    let w = ok(m.whole(), "the machine whole")?;
-    if w.memory == 0 || w.memory_used == 0 || w.memory_used > w.memory || w.disk == 0 || w.disk_free > w.disk || w.cpus == 0 || w.cpu < 0.0 || w.cpu > 100.0 * w.cpus as f64 {
-        return Err(format!("the machine said itself as no machine: {w:?}"));
-    }
-    let u = ok(m.using(group), "what a running group uses")?;
-    if u.processes == 0 || u.memory == 0 {
-        return Err(format!("a running group was said to use nothing: {u:?}"));
-    }
-    refused(m.using(none), "what a group that does not run uses")?;
-    Ok(())
-}
-
 /// MODEL: asked to say a word back, it answers with it, and the movement is handed to the record (`happened`); asked nothing, it is a
 /// SOURCE, ACTING FOR SOMEONE: asked `what` with `input`, it answers as `answered` expects — a movement asked of the record before and
 /// handed to it after; nothing asked, an act it does not do, or a movement the record refuses: a Fail, and nothing handed to the record
@@ -470,45 +376,6 @@ pub fn source_act(s: &dyn Source, what: &str, input: &serde_json::Value, answere
         return Err(format!("a movement that did not happen was handed to the record: {:?}", happened()));
     }
     Ok(())
-}
-
-/// VERSION, on one where `commit` puts a commit with its words (one whose words say "fails" breaks a check), and `builds` counts the
-/// builds made: the newest commit is said; a version is built once (built again, the one kept, no second build); a version not built,
-/// or one that does not hold, is never taken; taking switches, back goes to the one before, and with none before back is a Fail
-pub fn version(v: &dyn Version, commit: &dyn Fn(&str, &str), builds: &dyn Fn() -> usize) -> Result<(), String> {
-    commit("aaa1111", "first");
-    if ok(v.newest(), "the newest")?.map(|(c, _)| c).as_deref() != Some("aaa1111") {
-        return Err("the newest commit was not said".into());
-    }
-    let a = ok(v.build("aaa1111"), "build")?;
-    if !a.holds() || a.commit != "aaa1111" {
-        return Err(format!("a version that holds was built as {a:?}"));
-    }
-    if ok(v.build("aaa1111"), "build again")? != a || builds() != 1 {
-        return Err(format!("a commit built again was built {} times, or came back otherwise", builds()));
-    }
-    refused(v.build("nothing0"), "building a commit that is not there")?;
-    refused(v.take("bbb2222"), "taking a version not built")?;
-    ok(v.take("aaa1111"), "take")?;
-    commit("bbb2222", "second");
-    ok(v.build("bbb2222"), "build the second")?;
-    ok(v.take("bbb2222"), "take the second")?;
-    if ok(v.running(), "running")?.as_deref() != Some("bbb2222") {
-        return Err("the version taken is not the one running".into());
-    }
-    commit("ccc3333", "fails");
-    if ok(v.build("ccc3333"), "build one that fails")?.holds() {
-        return Err("a version that breaks a check was built as holding".into());
-    }
-    refused(v.take("ccc3333"), "taking a version that does not hold")?;
-    if ok(v.running(), "running")?.as_deref() != Some("bbb2222") {
-        return Err("a version refused changed what runs".into());
-    }
-    ok(v.back(), "back")?;
-    if ok(v.running(), "running")?.as_deref() != Some("aaa1111") {
-        return Err("back did not go to the one running before".into());
-    }
-    refused(v.back(), "back with none before")
 }
 
 /// BACKUP, on one whose `raw` reads what its place holds for a name as it is there: what is kept reads back exactly; the place never

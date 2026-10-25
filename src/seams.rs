@@ -233,50 +233,6 @@ pub trait Render {
     fn draw(&self, who: &Who, url: &str, width: u32, height: u32, script: Option<&str>) -> Answer<Drawn>;
 }
 
-// ─── MACHINE: what the machine itself does for Taldo ───
-
-pub trait Machine {
-    /// the program at `program` run by this machine's own supervisor as `name`: started now, whenever the machine starts, and again
-    /// whenever it ends — the same name again replaces what it runs
-    fn keep_running(&self, name: &str, program: &str, args: &[String]) -> Answer<()>;
-    /// no longer: stopped, and not started again
-    fn stop_running(&self, name: &str) -> Answer<()>;
-    /// whether the supervisor keeps `name` running
-    fn kept(&self, name: &str) -> Answer<bool>;
-    /// ASLEEP: the program kept running as `name` put to sleep — nothing of it runs, all of it kept, so woken it goes on exactly where
-    /// it was (asleep is not stopped: the supervisor still keeps it). Refused for a name not kept
-    fn sleep(&self, name: &str) -> Answer<()>;
-    /// AWAKE AGAIN, where it was — refused for one not asleep
-    fn wake(&self, name: &str) -> Answer<()>;
-    /// whether `name` is asleep now
-    fn asleep(&self, name: &str) -> Answer<bool>;
-    /// WHAT THE MACHINE HAS AND USES NOW, whole: its processors' use, its memory, its disk
-    fn whole(&self) -> Answer<Whole>;
-    /// what a group of processes uses now — a program and everything it started (`group`: its process group, or a job's own id)
-    fn using(&self, group: i64) -> Answer<Using>;
-    /// WHICH MACHINE THIS IS: the name its person knows it by — its node's name in their record, beneath them (this Mac, a server's
-    /// name) — and its kind (a Mac, a server)
-    fn name(&self) -> Answer<String>;
-    fn kind(&self) -> Answer<String>;
-}
-/// THE MACHINE, WHOLE: processors in use (100 per processor), memory used and had, disk free and had (bytes)
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Whole {
-    pub cpu: f64,
-    pub cpus: u32,
-    pub memory_used: u64,
-    pub memory: u64,
-    pub disk_free: u64,
-    pub disk: u64,
-}
-/// WHAT A GROUP USES: processors (100 per processor), memory resident, how many processes
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Using {
-    pub cpu: f64,
-    pub memory: u64,
-    pub processes: u32,
-}
-
 // ─── SOURCE: reading the person's world ───
 
 /// ONE THING IN A FOLDER: its name, whether it is a folder itself, its size, and when it last changed (ms since 1970)
@@ -287,7 +243,8 @@ pub struct Listed {
     pub bytes: u64,
     pub changed: u64,
 }
-/// A SOURCE IS EVERY OUTSIDE SYSTEM, where it is — a folder on the person's machine, GitHub, a model (Anthropic), a provider's machines
+/// A SOURCE IS EVERY OUTSIDE SYSTEM, where it is — the machine Taldo runs on (what it has and uses), a folder on the person's machine,
+/// GitHub, a model (Anthropic), a provider's machines
 /// (OVH), Google, a calendar, a bank — never copied in. What it HAS is read by path (the source's own, '/' between names, "" its top;
 /// nothing outside it is read); what it DOES for someone — a model's answer, a server made — is an act, a movement: asked of the record
 /// before, handed to it after
@@ -299,40 +256,6 @@ pub trait Source {
     /// what it does, asked `what` with `input`, for the movement `m`: its answer — or why not (a no from the record, nothing asked, an act
     /// it does not do)
     fn act(&self, m: &Move, what: &str, input: &serde_json::Value) -> Answer<serde_json::Value>;
-}
-
-// ─── VERSION: Taldo changing itself ───
-
-/// A VERSION AS BUILT: its commit, where the seam keeps it, the packages it brings (name and version), how long it took, and whether
-/// it holds what Taldo must do — each check by its name, passed or not
-#[derive(Debug, Clone, PartialEq)]
-pub struct Built {
-    pub commit: String,
-    pub kept: String,
-    pub packages: Vec<(String, String)>,
-    pub ms: u64,
-    pub checks: Vec<(String, bool)>,
-}
-impl Built {
-    /// whether every check held
-    pub fn holds(&self) -> bool {
-        !self.checks.is_empty() && self.checks.iter().all(|(_, ok)| *ok)
-    }
-}
-/// VERSION: a new program replacing the one running — built once from a commit (where is the adapter's: GitHub, a build machine,
-/// this Mac), checked against what Taldo must do, kept, then taken beside the one running, switched, and back by itself if it breaks.
-/// Never data: what changes Taldo itself has guarantees no data change needs
-pub trait Version {
-    /// the newest commit to make a version of, and its words — None while there is none
-    fn newest(&self) -> Answer<Option<(String, String)>>;
-    /// built once from `commit`, checked, kept: a commit built again is the version already kept, never built twice
-    fn build(&self, commit: &str) -> Answer<Built>;
-    /// taken: started beside the one running, ready, switched — refused for a commit not built, or built and not holding
-    fn take(&self, commit: &str) -> Answer<()>;
-    /// back to the one running before — refused when there is none
-    fn back(&self) -> Answer<()>;
-    /// the commit running now
-    fn running(&self) -> Answer<Option<String>>;
 }
 
 // ─── BACKUP: the record and the files, kept where Taldo is not ───
