@@ -4,7 +4,7 @@
 use crate::rows::{Entries, Source};
 use crate::twin::{Node, Twin};
 use serde_json::{Map, Value};
-use std::collections::{BTreeMap, BTreeSet};
+use imbl::{OrdMap, Vector};
 use std::sync::Arc;
 
 const MAGIC: &[u8] = b"taldo twin state 5\n";
@@ -44,7 +44,7 @@ impl W {
             last = *x;
         }
     }
-    fn broken(&mut self, l: &[(String, i64)]) {
+    fn broken(&mut self, l: &Vector<(String, i64)>) {
         self.u(l.len() as u64);
         for (h, a) in l {
             self.s(h);
@@ -91,17 +91,17 @@ impl R<'_> {
             _ => Err("the state holds details that are not an object".into()),
         }
     }
-    fn gs(&mut self) -> Result<Vec<i64>, String> {
+    fn gs(&mut self) -> Result<Vector<i64>, String> {
         let n = self.n()?;
-        let mut out = Vec::with_capacity(n.min(1 << 20));
+        let mut out = Vector::new();
         let mut last = 0i64;
         for _ in 0..n {
             last = last.wrapping_add(self.i()?);
-            out.push(last);
+            out.push_back(last);
         }
         Ok(out)
     }
-    fn broken(&mut self) -> Result<Vec<(String, i64)>, String> {
+    fn broken(&mut self) -> Result<Vector<(String, i64)>, String> {
         let n = self.n()?;
         (0..n).map(|_| Ok((self.s()?, self.i()?))).collect()
     }
@@ -224,11 +224,11 @@ impl Twin {
             t.answers.insert(g, r.gs()?);
         }
         for _ in 0..r.n()? {
-            t.rejected.push(r.json()?);
+            t.rejected.push_back(r.json()?);
         }
-        let mut lists: Vec<BTreeMap<String, Vec<i64>>> = vec![];
+        let mut lists: Vec<OrdMap<String, Vector<i64>>> = vec![];
         for _ in 0..2 {
-            let mut m = BTreeMap::new();
+            let mut m = OrdMap::new();
             for _ in 0..r.n()? {
                 let k = r.s()?;
                 m.insert(k, r.gs()?);
@@ -239,11 +239,11 @@ impl Twin {
         t.history = lists.pop().unwrap();
         for _ in 0..r.n()? {
             let k = r.s()?;
-            t.readers.insert(k, r.gs()?.into_iter().collect::<BTreeSet<_>>());
+            t.readers.insert(k, r.gs()?.into_iter().collect());
         }
-        let mut waits: Vec<BTreeMap<i64, Vec<(String, i64)>>> = vec![];
+        let mut waits: Vec<OrdMap<i64, Vector<(String, i64)>>> = vec![];
         for _ in 0..2 {
-            let mut m = BTreeMap::new();
+            let mut m = OrdMap::new();
             for _ in 0..r.n()? {
                 let g = r.i()?;
                 m.insert(g, r.broken()?);
@@ -274,7 +274,7 @@ impl Twin {
             }
             kinds.extend(std::iter::repeat(k).take(n));
         }
-        let mut with = BTreeMap::new();
+        let mut with = OrdMap::new();
         for _ in 0..r.n()? {
             let f = r.s()?;
             with.insert(f, r.gs()?);

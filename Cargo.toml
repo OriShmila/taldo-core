@@ -11,6 +11,8 @@ license = "MIT"
 serde_json = { version = "1", features = ["preserve_order"] }
 p256 = { version = "0.14", features = ["ecdsa"] }
 sha2 = "0.10"
+# the twin's state as shared persistent structures: an overlay of it is a handle, never a copy, and costs only what it touches
+imbl = "7"
 
 [lib]
 doctest = false

@@ -48,6 +48,11 @@
 //! below that node too (`below`; without it, the node itself and nothing under it — your key on a client's org node opens that node
 //! only), until when, and how much (`budget`: the sum of one of the act's values, over a window). A `revoke` answering it, by its
 //! writer or above, ends it. A mention is never a grant: running something, or naming it, gives no reach into it.
+//! A SEAL SAYS WHAT CODE A NODE RUNS: `{ wasm, cwasm: { <machine>: hash }, contract, reach }`, written at the node by a level above
+//! it — never by the node itself, by what is under it or beside it, and no grant opens it, so a level never seals itself. The newest
+//! seal at a node is what runs there (`sealed`); going back is sealing the one before again. Nothing runs at a node deleted or blocked.
+//! AN OVERLAY of the twin (`overlay`) takes entries that are never kept: it shares everything the twin holds and copies only what an
+//! entry lands on, so what a change would do is read exactly as from the twin, at the cost of what it touches.
 //! DELETING: a `delete` at a node hides it and everything under it at once — no act lands at or on it,
 //! nothing about it is asked or owed — and a `restore` answering it brings it back. It is taken only once the owner said how long a
 //! deletion waits (`keep_deleted`, ms, a detail of the node or one above it). When that is over, a `purge` answering it erases what it held: every entry at it and under it but the makes, the delete and its answers (`erasing`).
@@ -65,6 +70,7 @@
 use crate::entry::{check, ids_of, parse_id};
 use crate::rows::{Entries, Source};
 use serde_json::{json, Map, Value};
+use imbl::{OrdMap, OrdSet, Vector};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -82,41 +88,41 @@ pub struct Node {
     /// its details as accepted
     pub accepted: Map<String, Value>,
     /// the entries at it, by it, and naming it
-    pub at: Vec<i64>,
-    pub by: Vec<i64>,
-    pub named: Vec<i64>,
+    pub at: Vector<i64>,
+    pub by: Vector<i64>,
+    pub named: Vector<i64>,
 }
 
 #[derive(Clone, Default)]
 pub struct Twin {
-    pub nodes: BTreeMap<String, Node>,
-    pub kids: BTreeMap<String, BTreeSet<String>>,
+    pub nodes: OrdMap<String, Node>,
+    pub kids: OrdMap<String, OrdSet<String>>,
     /// the entries taken, by number: all in memory when folded from a list, else read from their rows (`rows`)
     pub entries: Entries,
     /// the entries that point to an entry, by any role
-    pub answers: BTreeMap<i64, Vec<i64>>,
+    pub answers: OrdMap<i64, Vector<i64>>,
     /// entries that are not entries, and why
-    pub rejected: Vec<Value>,
+    pub rejected: Vector<Value>,
     /// each node's own work, in order
-    pub(crate) history: BTreeMap<String, Vec<i64>>,
+    pub(crate) history: OrdMap<String, Vector<i64>>,
     /// the acceptances in force at each node
-    pub(crate) force: BTreeMap<String, Vec<i64>>,
+    pub(crate) force: OrdMap<String, Vector<i64>>,
     /// for each node, the acceptances in force that read it
-    pub(crate) readers: BTreeMap<String, BTreeSet<i64>>,
+    pub(crate) readers: OrdMap<String, OrdSet<i64>>,
     /// work that is not in, with what it breaks
-    pub(crate) out: BTreeMap<i64, Vec<(String, i64)>>,
+    pub(crate) out: OrdMap<i64, Vector<(String, i64)>>,
     /// acceptance changes not in force, with what each breaks
-    pub(crate) pending: BTreeMap<i64, Vec<(String, i64)>>,
+    pub(crate) pending: OrdMap<i64, Vector<(String, i64)>>,
     /// for each acceptance, the acceptances written since in its place (`re` it), in force or not
-    pub(crate) rewritten: BTreeMap<i64, Vec<i64>>,
+    pub(crate) rewritten: OrdMap<i64, Vector<i64>>,
     /// every signature taken: an act signed once is taken once
-    pub(crate) signatures: BTreeSet<String>,
+    pub(crate) signatures: OrdSet<String>,
     /// the entries signed with a person there (`identity`) — a fact for holds to read, never required here
-    pub(crate) present: BTreeSet<i64>,
+    pub(crate) present: OrdSet<i64>,
     /// the signatures of every act a purge erased, in their standard spelling: never taken again
-    pub(crate) erased: BTreeSet<String>,
+    pub(crate) erased: OrdSet<String>,
     /// when each take-over arrived: its key signs a day after
-    pub(crate) arrivals: BTreeMap<i64, i64>,
+    pub(crate) arrivals: OrdMap<i64, i64>,
 }
 
 impl Twin {
@@ -126,6 +132,18 @@ impl Twin {
             entries: Entries::stored(source),
             ..Default::default()
         }
+    }
+}
+
+impl Twin {
+    /// AN OVERLAY: this twin as it is now, for entries that are never kept — landed on it, they show what they would do, read exactly
+    /// as from a twin. It shares everything it holds with this twin and copies only what an entry lands on: making one costs nothing,
+    /// each entry costs only what it touches, and this twin is never changed by it. Its entries are new — numbered above every entry
+    /// this twin has — and stay in memory, since no row of them exists
+    pub fn overlay(&self) -> Twin {
+        let mut o = self.clone();
+        o.entries.overlay();
+        o
     }
 }
 
@@ -167,6 +185,30 @@ fn meets(c: &Value, details: &dyn Fn(&str) -> Map<String, Value>) -> bool {
     let d = details(&id_of(&c["expect"]["at"]));
     has.iter().all(|(k, x)| d.get(k) == Some(x))
 }
+/// A SEAL IS WHOLE: `wasm`, the module's hash; `cwasm`, its ready machine code's hash for each machine; `contract`, what it was built
+/// to; `reach`, what it may call — and nothing else
+fn seal_whole(v: &Value) -> Result<(), String> {
+    let hash = |x: &Value| x.as_str().is_some_and(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+    let Some(o) = v.as_object() else { return Err("a seal says its module, its machine code, its contract and its reach".into()) };
+    if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "wasm" | "cwasm" | "contract" | "reach")) {
+        return Err(format!("a seal says only its module, machine code, contract and reach — not {k}"));
+    }
+    if !hash(&v["wasm"]) {
+        return Err("a seal's wasm is its module's sha-256, in hex".into());
+    }
+    let machines = v["cwasm"].as_object().filter(|m| !m.is_empty() && m.iter().all(|(k, h)| !k.is_empty() && hash(h)));
+    if machines.is_none() {
+        return Err("a seal's cwasm is, for each machine, its ready code's sha-256 in hex".into());
+    }
+    if v["contract"].as_str().is_none_or(|c| c.trim().is_empty()) {
+        return Err("a seal names the contract it was built to".into());
+    }
+    if !v["reach"].as_array().is_some_and(|r| r.iter().all(|x| x.as_str().is_some_and(|x| !x.trim().is_empty()))) {
+        return Err("a seal's reach is the list of what it may call".into());
+    }
+    Ok(())
+}
+
 fn laid(mut d: Map<String, Value>, e: &Value) -> Map<String, Value> {
     for (k, x) in e["value"].as_object().cloned().unwrap_or_default() {
         d.insert(k, x);
@@ -246,6 +288,13 @@ impl Twin {
         out.sort();
         out
     }
+    /// THE CODE A NODE RUNS: its newest seal — said by a level above it — or none; nothing runs at a node deleted or blocked
+    pub fn sealed(&self, node: &str) -> Option<i64> {
+        if self.deleted(node) || self.blocked(node) {
+            return None;
+        }
+        self.at_kind(node, "seal").next_back().map(|(g, _)| g)
+    }
     /// WHETHER A NODE IS BLOCKED: a `block` at it or above it
     pub fn blocked(&self, id: &str) -> bool {
         self.chain(id).iter().any(|x| self.at_kind(x, "block").next().is_some())
@@ -264,7 +313,7 @@ impl Twin {
     }
     /// THE KIND A NODE WAS LET IN BY: the `identity` node its make names (`refs.as`)
     fn let_in_as(&self, id: &str) -> Option<String> {
-        let g = *self.nodes.get(id)?.at.first()?;
+        let g = *self.nodes.get(id)?.at.front()?;
         parse_id(&self.e(g)["refs"]["as"])
     }
     /// WHO CARRIES A RESPONSIBILITY NOW: its detail `carried_by`
@@ -281,13 +330,13 @@ impl Twin {
     }
     /// THE ENTRIES BY A NODE (`by` exactly that node) of a kind, read: oldest first (`.rev()` for newest first)
     pub fn by_kind<'a>(&'a self, node: &str, is: &'a str) -> impl DoubleEndedIterator<Item = (i64, Arc<Value>)> + 'a {
-        let gs = self.nodes.get(node).map(|n| n.by.as_slice()).unwrap_or(&[]);
-        gs.iter().filter(move |g| self.is(**g) == is).filter_map(move |g| self.entries.get(g).map(|e| (*g, e)))
+        let gs = self.nodes.get(node).into_iter().flat_map(|n| n.by.iter().copied());
+        gs.filter(move |g| self.is(*g) == is).filter_map(move |g| self.entries.get(&g).map(|e| (g, e)))
     }
     /// THE ENTRIES AT A NODE (`at` exactly that node) of a kind, read: oldest first (`.rev()` for newest first)
     pub fn at_kind<'a>(&'a self, node: &str, is: &'a str) -> impl DoubleEndedIterator<Item = (i64, Arc<Value>)> + 'a {
-        let gs = self.nodes.get(node).map(|n| n.at.as_slice()).unwrap_or(&[]);
-        gs.iter().filter(move |g| self.is(**g) == is).filter_map(move |g| self.entries.get(g).map(|e| (*g, e)))
+        let gs = self.nodes.get(node).into_iter().flat_map(|n| n.at.iter().copied());
+        gs.filter(move |g| self.is(*g) == is).filter_map(move |g| self.entries.get(&g).map(|e| (g, e)))
     }
     /// ENTRY `g`, known to be taken — read from its row when the twin keeps rows (`entries.get` when it may not be)
     pub fn entry(&self, g: i64) -> Arc<Value> {
@@ -442,7 +491,7 @@ impl Twin {
         match self.admit(e, arrived) {
             Ok(present) => self.land(e, present, arrived),
             Err(why) => {
-                self.rejected.push(why);
+                self.rejected.push_back(why);
                 BTreeSet::new()
             }
         }
@@ -456,13 +505,21 @@ impl Twin {
             Ok(p) => p,
             Err(why) => return Err(json!({ "g": e["g"], "why": why })),
         };
+        // AN OVERLAY OF ROWS takes only new acts: numbered above every row it was made on
+        if let Some(to) = self.entries.overlay_of_rows() {
+            if e["g"].as_i64().is_none_or(|g| g <= to) {
+                return Err(json!({ "g": e["g"], "why": format!("an overlay takes only new acts, numbered above {to}") }));
+            }
+        }
         // TAKEN ONCE, recognised by its signature's standard spelling: the same act signed once, written another way, is the same act
         if let Some(s) = e["sig"]["sig"].as_str().and_then(crate::identity::canonical_sig).as_deref() {
             let taken = match self.entries.source() {
                 None => self.signatures.contains(s),
-                Some(src) => src
-                    .signed(s)
-                    .is_some_and(|x| Some(x) != e["g"].as_i64() && self.entries.contains_key(&x)),
+                // an overlay's own acts have no rows: it knows their signatures itself
+                Some(src) => {
+                    src.signed(s).is_some_and(|x| Some(x) != e["g"].as_i64() && self.entries.contains_key(&x))
+                        || self.signatures.contains(s)
+                }
             };
             if taken {
                 return Err(json!({ "g": e["g"], "why": "this signed act was already taken" }));
@@ -568,6 +625,17 @@ impl Twin {
                 return Err(json!({ "g": e["g"], "why": "a take-over brings only keys, at the one it takes over for" }));
             }
         }
+        // A SEAL says what code a node runs. Only a level above the node says it — never the node itself, what is under it or beside
+        // it, and no grant opens it: a level never seals itself. It is whole: the module's hash, its ready machine code's hash for each
+        // machine, the contract it was built to, and what it reaches
+        if e["is"] == "seal" {
+            if at == by || !self.within(&at, &by) {
+                return Err(json!({ "g": e["g"], "why": format!("only a level above {at} seals it") }));
+            }
+            if let Err(why) = seal_whole(&e["value"]) {
+                return Err(json!({ "g": e["g"], "why": why }));
+            }
+        }
         if e["is"] == "make" {
             if let Some(k) = e["value"].as_object().into_iter().flatten().map(|(k, _)| k).find(|k| *k != "kind" && *k != "keys") {
                 return Err(json!({ "g": e["g"], "why": format!("a make says only its kind (and keys) — its {k} is a detail after it") }));
@@ -667,7 +735,7 @@ impl Twin {
         if e["is"] == "takeover" {
             self.arrivals.insert(e["g"].as_i64().unwrap_or(0), arrived);
         }
-        if self.entries.source().is_none() {
+        if self.entries.source().is_none() || self.entries.is_overlay() {
             if let Some(s) = e["sig"]["sig"].as_str().and_then(crate::identity::canonical_sig) {
                 self.signatures.insert(s);
             }
@@ -694,19 +762,19 @@ impl Twin {
         if e["is"] == "purge" {
             self.erased.extend(e["value"]["sigs"].as_array().into_iter().flatten().filter_map(Value::as_str).filter_map(crate::identity::canonical_sig));
         }
-        self.nodes.get_mut(&by).unwrap().by.push(g);
-        self.nodes.get_mut(&at).unwrap().at.push(g);
+        self.nodes.get_mut(&by).unwrap().by.push_back(g);
+        self.nodes.get_mut(&at).unwrap().at.push_back(g);
         for (role, v) in e["refs"].as_object().cloned().unwrap_or_default() {
             if e["is"] == "make" && role == "in" {
                 continue;
             }
             for k in ids_of(&v) {
                 touched.insert(k.clone());
-                self.nodes.get_mut(&k).unwrap().named.push(g);
+                self.nodes.get_mut(&k).unwrap().named.push_back(g);
             }
         }
         for x in numbers(e) {
-            self.answers.entry(x).or_default().push(g);
+            self.answers.entry(x).or_default().push_back(g);
             if let Some(a) = self.entries.get(&x).and_then(|y| parse_id(&y["at"])) {
                 touched.insert(a);
             }
@@ -716,22 +784,22 @@ impl Twin {
                 let n = self.nodes.get_mut(&at).unwrap();
                 n.value = laid(std::mem::take(&mut n.value), e);
                 // 3. work comes last in its node's history: it is read on top of what is in there now
-                self.history.entry(at.clone()).or_default().push(g);
+                self.history.entry(at.clone()).or_default().push_back(g);
                 let readers = self.readers.get(&at).cloned().unwrap_or_default();
                 let broken = self.breaks(g, &readers, &self.accepted_of(&at));
                 if broken.is_empty() {
                     let n = self.nodes.get_mut(&at).unwrap();
                     n.accepted = laid(std::mem::take(&mut n.accepted), e);
                 } else {
-                    self.out.insert(g, broken);
+                    self.out.insert(g, broken.into_iter().collect());
                 }
             }
             // 2. an acceptance its node's level above wrote is a change, to come into force
             "acceptance" if self.parent(&at).as_deref() == Some(by.as_str()) => {
                 if let Some(re) = e["refs"]["re"].as_i64() {
-                    self.rewritten.entry(re).or_default().push(g);
+                    self.rewritten.entry(re).or_default().push_back(g);
                 }
-                self.pending.insert(g, vec![]);
+                self.pending.insert(g, Vector::new());
                 touched.insert(at.clone());
             }
             _ => {}
@@ -745,7 +813,7 @@ impl Twin {
     fn breaks(
         &self,
         w: i64,
-        readers: &BTreeSet<i64>,
+        readers: &OrdSet<i64>,
         before: &Map<String, Value>,
     ) -> Vec<(String, i64)> {
         let e = self.e(w);
@@ -777,7 +845,7 @@ impl Twin {
     fn reread(
         &self,
         node: &str,
-        readers: &BTreeSet<i64>,
+        readers: &OrdSet<i64>,
     ) -> (Map<String, Value>, BTreeMap<i64, Vec<(String, i64)>>) {
         let (mut d, mut out) = (Map::new(), BTreeMap::new());
         for w in self.history.get(node).into_iter().flatten() {
@@ -813,7 +881,7 @@ impl Twin {
                 let mut next: BTreeMap<
                     String,
                     (
-                        BTreeSet<i64>,
+                        OrdSet<i64>,
                         Map<String, Value>,
                         BTreeMap<i64, Vec<(String, i64)>>,
                     ),
@@ -855,17 +923,12 @@ impl Twin {
                     if let Some(o) = old {
                         f.retain(|x| *x != o);
                     }
-                    f.push(c);
+                    f.push_back(c);
                     for (x, (r, d, out)) in next {
-                        let hist: BTreeSet<i64> = self
-                            .history
-                            .get(&x)
-                            .into_iter()
-                            .flatten()
-                            .copied()
-                            .collect();
-                        self.out.retain(|w, _| !hist.contains(w));
-                        self.out.extend(out);
+                        for w in self.history.get(&x).into_iter().flatten() {
+                            self.out.remove(w);
+                        }
+                        self.out.extend(out.into_iter().map(|(w, b)| (w, b.into_iter().collect::<Vector<_>>())));
                         self.readers.insert(x.clone(), r);
                         self.nodes.get_mut(&x).unwrap().accepted = d;
                         touched.insert(x);
@@ -874,7 +937,7 @@ impl Twin {
                     moved = true;
                     break;
                 }
-                self.pending.insert(c, broken);
+                self.pending.insert(c, broken.into_iter().collect());
             }
             if !moved {
                 break;
@@ -882,7 +945,7 @@ impl Twin {
         }
     }
     /// 4. where a change that is not in waits: the nearest holder of what it breaks that has not written that acceptance since
-    fn waits_at(&self, c: i64, broken: &[(String, i64)]) -> Vec<(String, i64)> {
+    fn waits_at(&self, c: i64, broken: &Vector<(String, i64)>) -> Vec<(String, i64)> {
         let depth = |h: &str| self.level(h).unwrap_or(0);
         let nearest = broken.iter().map(|(h, _)| depth(h)).max().unwrap_or(0);
         let decided = |h: &str, a: i64| {
@@ -1172,8 +1235,6 @@ impl Twin {
     pub fn asks_for(&self, holder: &str) -> Vec<(i64, bool)> {
         self.entries
             .of_kind("ask")
-            .iter()
-            .copied()
             .filter(|g| {
                 self.ask_open(*g)
                     && self.holder_of(*g).is_some_and(|h| h == holder || self.carriers(&h).iter().any(|c| c == holder))
@@ -1184,7 +1245,7 @@ impl Twin {
 
     /// THE ACCEPTANCES IN FORCE AT A NODE
     pub fn in_force(&self, node: &str) -> Vec<i64> {
-        self.force.get(node).cloned().unwrap_or_default()
+        self.force.get(node).map(|f| f.iter().copied().collect()).unwrap_or_default()
     }
     /// WHETHER AN ENTRY IS ACCEPTED: work, when the acceptances in force let it in; an acceptance change, when it came into force
     pub fn accepted(&self, g: i64) -> bool {

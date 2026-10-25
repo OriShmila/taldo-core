@@ -3,7 +3,8 @@
 //! stays in memory: which numbers are entries and of what kind, and the few entries read lately; any other entry is read from its row
 //! when asked for. Memory then stays flat as history grows. The core never touches a file: the source is the program's.
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use imbl::{OrdMap, Vector};
+use std::collections::HashMap;
 use std::ops::{Bound, RangeBounds};
 use std::sync::{Arc, Mutex};
 
@@ -58,33 +59,38 @@ impl Hand {
 /// THE ENTRIES OF A TWIN: by number; each entry's kind known without reading it
 pub struct Entries {
     /// every entry, when there is no source
-    mem: BTreeMap<i64, Arc<Value>>,
+    mem: OrdMap<i64, Arc<Value>>,
     source: Option<Arc<dyn Source>>,
     hand: Mutex<Hand>,
     /// for each number, its entry's kind (an index into `names`, plus one) — 0 when that number is no entry
-    kind: Vec<u32>,
+    kind: Vector<u32>,
     names: Vec<String>,
     ids: HashMap<String, u32>,
     /// the entries of each kind, in order
-    of_kind: HashMap<u32, Vec<i64>>,
+    of_kind: HashMap<u32, Vector<i64>>,
     /// the details indexed: for each, the entries whose value has it, in order
-    with: BTreeMap<String, Vec<i64>>,
+    with: OrdMap<String, Vector<i64>>,
     count: usize,
     top: i64,
+    /// AN OVERLAY'S: its own entries have no rows — they are numbered above every row it was made on (`rows_to`), kept in memory
+    overlay: bool,
+    rows_to: i64,
 }
 impl Default for Entries {
     fn default() -> Self {
         Entries {
-            mem: BTreeMap::new(),
+            mem: OrdMap::new(),
             source: None,
             hand: Mutex::new(Hand::default()),
-            kind: vec![],
+            kind: Vector::new(),
             names: vec![],
             ids: HashMap::new(),
             of_kind: HashMap::new(),
-            with: BTreeMap::new(),
+            with: OrdMap::new(),
             count: 0,
             top: 0,
+            overlay: false,
+            rows_to: 0,
         }
     }
 }
@@ -101,6 +107,8 @@ impl Clone for Entries {
             with: self.with.clone(),
             count: self.count,
             top: self.top,
+            overlay: self.overlay,
+            rows_to: self.rows_to,
         }
     }
 }
@@ -135,6 +143,25 @@ impl Entries {
     pub fn source(&self) -> Option<&Arc<dyn Source>> {
         self.source.as_ref()
     }
+    /// BECOME AN OVERLAY'S ENTRIES: whatever lands from now on is kept here, never as a row
+    pub(crate) fn overlay(&mut self) {
+        if !self.overlay {
+            self.overlay = true;
+            // with no entry yet, no row is below it
+            self.rows_to = if self.count == 0 { -1 } else { self.top };
+        }
+    }
+    pub(crate) fn is_overlay(&self) -> bool {
+        self.overlay
+    }
+    /// AN OVERLAY OF ROWS: the last number in its rows — every entry it takes is numbered above it
+    pub(crate) fn overlay_of_rows(&self) -> Option<i64> {
+        (self.overlay && self.source.is_some()).then_some(self.rows_to)
+    }
+    /// whether entry `g` is read from the rows: kept as rows, and not an overlay's own
+    fn in_rows(&self, g: i64) -> bool {
+        self.source.is_some() && !(self.overlay && g > self.rows_to)
+    }
     fn id(&mut self, is: &str) -> u32 {
         if let Some(i) = self.ids.get(is) {
             return *i;
@@ -150,8 +177,8 @@ impl Entries {
         let k = self.id(&is);
         if g >= 0 {
             let i = g as usize;
-            if self.kind.len() <= i {
-                self.kind.resize(i + 1, 0);
+            while self.kind.len() <= i {
+                self.kind.push_back(0);
             }
             let was = self.kind[i];
             if was != k {
@@ -161,22 +188,24 @@ impl Entries {
                     l.retain(|x| *x != g);
                 }
                 let l = self.of_kind.entry(k).or_default();
-                let at = l.partition_point(|x| *x < g);
+                let at = l.binary_search(&g).unwrap_or_else(|at| at);
                 l.insert(at, g);
             }
             self.kind[i] = k;
         }
         self.top = self.top.max(g);
-        for (f, l) in self.with.iter_mut() {
-            if !e["value"][f.as_str()].is_null() && l.last().is_none_or(|x| *x < g) {
-                l.push(g);
-            } else if !e["value"][f.as_str()].is_null() && !l.contains(&g) {
-                let at = l.partition_point(|x| *x < g);
+        for f in self.with.keys().cloned().collect::<Vec<_>>() {
+            if e["value"][f.as_str()].is_null() {
+                continue;
+            }
+            let l = self.with.get_mut(&f).expect("an index kept");
+            if let Err(at) = l.binary_search(&g) {
                 l.insert(at, g);
             }
         }
+        assert!(!self.overlay || self.source.is_none() || g > self.rows_to, "an overlay's entry {g} is not above the rows it was made on ({})", self.rows_to);
         let v = Arc::new(e.clone());
-        if self.source.is_some() {
+        if self.in_rows(g) {
             self.hand.lock().unwrap_or_else(|x| x.into_inner()).put(g, v);
         } else {
             self.mem.insert(g, v);
@@ -192,16 +221,12 @@ impl Entries {
         (k != 0).then(|| self.names[k as usize - 1].as_str())
     }
     /// THE ENTRIES OF A KIND, oldest first
-    pub fn of_kind(&self, is: &str) -> &[i64] {
-        self.ids
-            .get(is)
-            .and_then(|k| self.of_kind.get(k))
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+    pub fn of_kind<'a>(&'a self, is: &str) -> impl DoubleEndedIterator<Item = i64> + 'a {
+        self.ids.get(is).and_then(|k| self.of_kind.get(k)).into_iter().flat_map(|l| l.iter().copied())
     }
     /// THE ENTRIES OF A KIND, read: oldest first (`.rev()` for newest first)
     pub fn of<'a>(&'a self, is: &str) -> impl DoubleEndedIterator<Item = (i64, Arc<Value>)> + 'a {
-        self.of_kind(is).iter().filter_map(move |g| self.get(g).map(|e| (*g, e)))
+        self.of_kind(is).filter_map(move |g| self.get(&g).map(|e| (g, e)))
     }
     /// THE ENTRIES WHOSE VALUE HAS A DETAIL (`value.<field>`, not null), oldest first — kept at hand for each detail indexed
     /// (`index`); any other is asked of the source, else the entries are walked
@@ -209,7 +234,8 @@ impl Entries {
         if let Some(l) = self.with.get(field) {
             return l.iter().copied().filter(|g| self.contains_key(g)).collect();
         }
-        if let Some(gs) = self.source.as_ref().and_then(|s| s.having(field)) {
+        // the rows' own index holds no overlay's entries: an overlay walks them
+        if let Some(gs) = self.source.as_ref().filter(|_| !self.overlay).and_then(|s| s.having(field)) {
             return gs.into_iter().filter(|g| self.contains_key(g)).collect();
         }
         self.iter().filter(|(_, e)| !e["value"][field].is_null()).map(|(g, _)| g).collect()
@@ -219,16 +245,16 @@ impl Entries {
     pub fn index(&mut self, fields: &[&str]) {
         for f in fields {
             if !self.with.contains_key(*f) {
-                let l = self.having(f);
+                let l = self.having(f).into_iter().collect();
                 self.with.insert(f.to_string(), l);
             }
         }
     }
     /// the details indexed, each with its entries (for a snapshot)
-    pub(crate) fn indexes(&self) -> &BTreeMap<String, Vec<i64>> {
+    pub(crate) fn indexes(&self) -> &OrdMap<String, Vector<i64>> {
         &self.with
     }
-    pub(crate) fn set_indexes(&mut self, with: BTreeMap<String, Vec<i64>>) {
+    pub(crate) fn set_indexes(&mut self, with: OrdMap<String, Vector<i64>>) {
         self.with = with;
     }
     /// ENTRY `g`, read from its row when it is not at hand
@@ -236,7 +262,7 @@ impl Entries {
         if !self.contains_key(g) {
             return None;
         }
-        let Some(src) = &self.source else {
+        let Some(src) = self.source.as_ref().filter(|_| self.in_rows(*g)) else {
             return self.mem.get(g).cloned();
         };
         if let Some(v) = self.hand.lock().unwrap_or_else(|x| x.into_inner()).get(*g) {
@@ -286,7 +312,7 @@ impl Entries {
         }
     }
     /// the kinds' names and each number's kind, as kept (for a snapshot)
-    pub(crate) fn kinds(&self) -> (&[String], &[u32]) {
+    pub(crate) fn kinds(&self) -> (&[String], &Vector<u32>) {
         (&self.names, &self.kind)
     }
     /// the entries known again from a snapshot: their numbers and kinds; their rows are read from the source
@@ -302,10 +328,10 @@ impl Entries {
             if *k != 0 {
                 e.count += 1;
                 e.top = g as i64;
-                e.of_kind.entry(*k).or_default().push(g as i64);
+                e.of_kind.entry(*k).or_default().push_back(g as i64);
             }
         }
-        e.kind = kind;
+        e.kind = kind.into_iter().collect();
         e
     }
 }
@@ -324,45 +350,53 @@ impl Iter<'_> {
             return;
         }
         let es = self.es;
-        let got: Vec<(i64, Arc<Value>)> = match &es.source {
-            None => {
-                let it = es.mem.range(self.lo..=self.hi);
-                if newest_first {
-                    it.rev().take(PAGE).map(|(g, v)| (*g, v.clone())).collect()
-                } else {
-                    it.take(PAGE).map(|(g, v)| (*g, v.clone())).collect()
-                }
+        // what is read from the rows: up to the last row (all of it, but an overlay's own entries); the rest is in memory
+        let rows_to = match (&es.source, es.overlay) {
+            (None, _) => i64::MIN,
+            (Some(_), false) => i64::MAX,
+            (Some(_), true) => es.rows_to,
+        };
+        if if newest_first { self.hi <= rows_to } else { self.lo <= rows_to } {
+            let src = es.source.as_ref().expect("rows are read only from a source");
+            let hi = self.hi.min(rows_to);
+            let rows = src.page(self.lo, hi, newest_first, PAGE);
+            // the last row read bounds what was read, entries or not
+            let edge = rows.last().map(|(g, _)| *g);
+            let out: Vec<(i64, Arc<Value>)> = rows
+                .into_iter()
+                .filter(|(g, _)| es.contains_key(g))
+                .map(|(g, v)| (g, Arc::new(v)))
+                .collect();
+            match (edge, newest_first) {
+                (None, false) => self.lo = hi + 1,
+                (None, true) => self.hi = self.lo - 1,
+                (Some(e), false) => self.lo = e + 1,
+                (Some(e), true) => self.hi = e - 1,
             }
-            Some(src) => {
-                let rows = src.page(self.lo, self.hi, newest_first, PAGE);
-                // the last row read bounds what was read, entries or not
-                let edge = rows.last().map(|(g, _)| *g);
-                let out: Vec<(i64, Arc<Value>)> = rows
-                    .into_iter()
-                    .filter(|(g, _)| es.contains_key(g))
-                    .map(|(g, v)| (g, Arc::new(v)))
-                    .collect();
-                match (edge, newest_first) {
-                    (None, _) => {
-                        self.lo = self.hi + 1;
-                        return;
-                    }
-                    (Some(e), false) => self.lo = e + 1,
-                    (Some(e), true) => self.hi = e - 1,
-                }
-                if out.is_empty() {
-                    return self.fill(newest_first);
-                }
-                if newest_first {
-                    self.back.extend(out);
-                } else {
-                    self.front.extend(out);
-                }
-                return;
+            if out.is_empty() {
+                return self.fill(newest_first);
             }
+            if newest_first {
+                self.back.extend(out);
+            } else {
+                self.front.extend(out);
+            }
+            return;
+        }
+        let lo = self.lo.max(rows_to.saturating_add(1));
+        let it = es.mem.range(lo..=self.hi);
+        let got: Vec<(i64, Arc<Value>)> = if newest_first {
+            it.rev().take(PAGE).map(|(g, v)| (*g, v.clone())).collect()
+        } else {
+            it.take(PAGE).map(|(g, v)| (*g, v.clone())).collect()
         };
         match (got.last().map(|(g, _)| *g), newest_first) {
-            (None, _) => self.lo = self.hi + 1,
+            (None, false) => self.lo = self.hi + 1,
+            // nothing more in memory going back: the rows below it, if any, are next
+            (None, true) => {
+                self.hi = lo - 1;
+                return self.fill(true);
+            }
             (Some(e), false) => self.lo = e + 1,
             (Some(e), true) => self.hi = e - 1,
         }

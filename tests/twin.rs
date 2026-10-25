@@ -19,7 +19,7 @@ fn a_make_brings_a_node_under_its_parent() {
     assert!(t.rejected.is_empty(), "{:?}", t.rejected);
     assert_eq!(t.parent("Ori › Mac › file").as_deref(), Some("Ori › Mac"));
     assert_eq!(t.children("Ori › Mac"), vec!["Ori › Mac › file".to_string()]);
-    assert_eq!(t.nodes["Ori › Mac › file"].at, vec![2, 3]);
+    assert_eq!(t.nodes["Ori › Mac › file"].at.iter().copied().collect::<Vec<_>>(), vec![2, 3]);
 }
 
 #[test]

@@ -33,7 +33,18 @@ impl Source for Rows {
         }
     }
     fn signed(&self, sig: &str) -> Option<i64> {
-        self.0.lock().unwrap().iter().find(|(_, l)| serde_json::from_str::<Value>(l).unwrap()["sig"]["sig"] == sig).map(|(g, _)| *g)
+        // by the signature's standard spelling, as every source keeps it
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, l)| serde_json::from_str::<Value>(l).unwrap()["sig"]["sig"].as_str().and_then(taldo_core::identity::canonical_sig).as_deref() == Some(sig))
+            .map(|(g, _)| *g)
+    }
+    /// the rows' own index of a detail, as a store may keep one
+    fn having(&self, field: &str) -> Option<Vec<i64>> {
+        let m = self.0.lock().unwrap();
+        Some(m.iter().filter(|(_, l)| !serde_json::from_str::<Value>(l).unwrap()["value"][field].is_null()).map(|(g, _)| *g).collect())
     }
 }
 impl Rows {
@@ -49,13 +60,13 @@ fn take(t: &mut Twin, rows: &Rows, e: &Value, arrived: i64) {
             rows.put(e);
             t.land(e, present, arrived);
         }
-        Err(why) => t.rejected.push(why),
+        Err(why) => t.rejected.push_back(why),
     }
 }
 
 /// what a twin says, read whole: each node, each entry, each ask and hold, what waits and what is owed, what was rejected
 fn said(t: &Twin) -> Value {
-    let nodes: Value = t.nodes.iter().map(|(k, n)| (k.clone(), json!({ "value": n.value, "accepted": n.accepted, "at": n.at, "by": n.by, "named": n.named, "kids": t.children(k), "force": t.in_force(k), "waiting": t.waiting(k), "asks": t.asks_for(k), "flows": t.flows(k) }))).collect::<serde_json::Map<_, _>>().into();
+    let nodes: Value = t.nodes.iter().map(|(k, n)| (k.clone(), json!({ "value": n.value, "accepted": n.accepted, "at": n.at.iter().collect::<Vec<_>>(), "by": n.by.iter().collect::<Vec<_>>(), "named": n.named.iter().collect::<Vec<_>>(), "kids": t.children(k), "force": t.in_force(k), "waiting": t.waiting(k), "asks": t.asks_for(k), "flows": t.flows(k) }))).collect::<serde_json::Map<_, _>>().into();
     let entries: Vec<Value> = t.entries.iter().map(|(g, e)| {
         let ask = (e["is"] == "ask").then(|| json!({ "open": t.ask_open(g), "holder": t.holder_of(g), "moved": t.moved(g), "joins": t.joins(g), "evidence": t.evidence(g) }));
         let hold = (e["is"] == "acceptance").then(|| json!({ "holds": t.holds(g), "unanswered": t.unanswered(g) }));
@@ -147,7 +158,7 @@ fn a_twin_kept_as_rows_is_the_twin_folded_from_the_list() {
     fwd.reverse();
     assert_eq!(back, fwd);
     assert_eq!(t.entries.range(40..=50).count(), folded.entries.range(40..=50).count());
-    assert_eq!(t.entries.of_kind("ask"), folded.entries.of_kind("ask"));
+    assert_eq!(t.entries.of_kind("ask").collect::<Vec<_>>(), folded.entries.of_kind("ask").collect::<Vec<_>>());
 }
 
 #[test]
@@ -202,3 +213,142 @@ fn an_act_refused_leaves_no_trace() {
     assert!(t.admit(&old, at).is_err());
     assert!(t.admit(&old, 0).is_err());
 }
+
+/// THE SAME RECORD NUMBERED IN THE ORDER IT IS TAKEN, as a store keeps rows (each above the last): every number it names follows, and
+/// each act is signed again by the same key that signed it — its writer, a level above, or the finger
+fn in_order(log: &[Value]) -> Vec<Value> {
+    let new: BTreeMap<i64, i64> = log.iter().enumerate().map(|(i, e)| (e["g"].as_i64().unwrap(), i as i64)).collect();
+    let ids: Vec<String> = log.iter().flat_map(|e| [e["by"].as_str(), e["at"].as_str()]).flatten().map(String::from).collect();
+    // the same signed act twice stays the same act twice: its signature, given once, is given again
+    let mut again: BTreeMap<String, Value> = BTreeMap::new();
+    log.iter()
+        .map(|e| {
+            let mut x = e.clone();
+            let g = new[&e["g"].as_i64().unwrap()];
+            x["g"] = json!(g);
+            x["ts"] = json!(g);
+            if let Some(refs) = x["refs"].as_object_mut() {
+                for v in refs.values_mut() {
+                    if let Some(n) = v.as_i64() {
+                        *v = json!(new[&n]);
+                    }
+                }
+            }
+            let Some(key) = e["sig"]["key"].as_str() else { return x };
+            let was = e["sig"]["sig"].as_str().unwrap().to_string();
+            if let Some(sig) = again.get(&was) {
+                x["sig"] = sig.clone();
+                return x;
+            }
+            let x = if key == common::finger_public() {
+                common::touched(x)
+            } else {
+                common::signed_by(ids.iter().find(|id| common::public(id) == key).expect("the key that signed it"), x)
+            };
+            again.insert(was, x["sig"].clone());
+            x
+        })
+        .collect()
+}
+
+/// AN OVERLAY is the twin as it is, with entries landed on it that are never kept: at every point of the record — folded from the
+/// list or kept as rows — the overlay with the rest landed says exactly what the whole record folded says, the twin it was made on
+/// still says exactly what it said, and no row is written
+#[test]
+fn an_overlay_says_what_the_whole_record_says_and_leaves_its_twin_as_it_was() {
+    let log = record();
+    let whole = said(&fold(&log));
+    for k in 0..=log.len() {
+        // folded from the list
+        let base = fold(&log[..k]);
+        let before = said(&base);
+        let mut o = base.overlay();
+        for e in &log[k..] {
+            o.apply(e);
+        }
+        assert_eq!(said(&o), whole, "an overlay made after {k} entries");
+        assert_eq!(said(&base), before, "the twin an overlay was made on, after {k} entries");
+    }
+    // kept as rows: the record numbered as a store keeps it, each entry above the last — overlays made at every point of it
+    let log = in_order(&log);
+    let whole = said(&fold(&log));
+    assert_eq!(fold(&log).rejected.len(), fold(&record()).rejected.len(), "numbered in order, the record refuses what it refused");
+    for k in 0..=log.len() {
+        let rows = Arc::new(Rows::default());
+        let mut base = Twin::stored(rows.clone());
+        base.entries.index(&["says"]);
+        for e in &log[..k] {
+            take(&mut base, &rows, e, e["ts"].as_i64().unwrap());
+        }
+        let (before, kept) = (said(&base), rows.0.lock().unwrap().len());
+        let mut o = base.overlay();
+        for e in &log[k..] {
+            o.apply(e);
+        }
+        assert_eq!(said(&o), whole, "an overlay of rows made after {k} entries");
+        for f in ["says", "keys", "moves"] {
+            assert_eq!(o.entries.having(f), fold(&log).entries.having(f), "{f}, an overlay of rows made after {k} entries");
+        }
+        assert_eq!(said(&base), before, "the rows' twin an overlay was made on, after {k} entries");
+        assert_eq!(rows.0.lock().unwrap().len(), kept, "an overlay writes no row");
+    }
+}
+
+/// AN OVERLAY KEEPS EVERY ENTRY IT TOOK, however many: more than a twin kept as rows holds at hand, each read back, walked and found
+#[test]
+fn an_overlay_of_rows_keeps_every_entry_it_took() {
+    let log = record();
+    let rows = Arc::new(Rows::default());
+    let mut base = Twin::stored(rows.clone());
+    for e in &log {
+        take(&mut base, &rows, e, e["ts"].as_i64().unwrap());
+    }
+    let top = base.entries.top();
+    let s = "Ori › Claude Code › session a";
+    let more: Vec<Value> = (top + 1..=top + 4200).map(|g| act(g, s, s, "step", json!({}), json!({ "says": format!("more {g}") }))).collect();
+    let mut o = base.overlay();
+    for e in &more {
+        o.apply(e);
+    }
+    assert!(o.rejected.len() == base.rejected.len(), "every step is taken: {:?}", o.rejected.iter().last());
+    for e in &more {
+        let g = e["g"].as_i64().unwrap();
+        assert_eq!(*o.entries.get(&g).expect("an overlay's entry read back"), *e);
+    }
+    assert_eq!(o.entries.iter().count(), base.entries.iter().count() + more.len());
+    assert_eq!(o.entries.iter().rev().count(), base.entries.iter().count() + more.len());
+    assert_eq!(o.entries.having("says").len(), base.entries.having("says").len() + more.len());
+    let mut whole = log.clone();
+    whole.extend(more);
+    assert_eq!(said(&o), said(&fold(&whole)));
+    assert_eq!(rows.0.lock().unwrap().len(), log.len() - base.rejected.len(), "an overlay writes no row");
+}
+
+/// TAKEN ONCE, IN AN OVERLAY TOO: an act already in the rows, or already landed on the overlay, is refused there
+#[test]
+fn an_overlay_takes_a_signed_act_once() {
+    let log = record();
+    let rows = Arc::new(Rows::default());
+    let mut base = Twin::stored(rows.clone());
+    for e in &log {
+        take(&mut base, &rows, e, e["ts"].as_i64().unwrap());
+    }
+    let top = base.entries.top();
+    let s = "Ori › Claude Code › session a";
+    let mut o = base.overlay();
+    // an act the rows hold, numbered again
+    let mut again = log[20].clone();
+    again["g"] = json!(top + 1);
+    assert!(o.admit(&again, top + 1).is_err(), "an act in the rows is taken once");
+    // an act the overlay took, numbered again
+    let new = act(top + 2, s, s, "step", json!({}), json!({ "says": "once" }));
+    o.apply(&new);
+    assert!(o.entries.contains_key(&(top + 2)));
+    let mut twice = new.clone();
+    twice["g"] = json!(top + 3);
+    assert_eq!(o.admit(&twice, top + 3).unwrap_err()["why"], "this signed act was already taken");
+    // an act numbered among the rows is no new act: refused, with why — never taken, never a crash
+    let old = act(top - 1, s, s, "step", json!({}), json!({ "says": "old" }));
+    assert_eq!(o.admit(&old, top).unwrap_err()["why"], format!("an overlay takes only new acts, numbered above {top}"));
+}
+
