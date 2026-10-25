@@ -504,9 +504,6 @@ pub fn version(v: &dyn Version, commit: &dyn Fn(&str, &str), builds: &dyn Fn() -
     if ok(v.running(), "running")?.as_deref() != Some("bbb2222") {
         return Err("a version refused changed what runs".into());
     }
-    if ok(v.change("aaa1111", "bbb2222"), "the change")?.is_empty() {
-        return Err("a change between two commits said nothing".into());
-    }
     ok(v.back(), "back")?;
     if ok(v.running(), "running")?.as_deref() != Some("aaa1111") {
         return Err("back did not go to the one running before".into());

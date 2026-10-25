@@ -325,8 +325,6 @@ impl Built {
 pub trait Version {
     /// the newest commit to make a version of, and its words — None while there is none
     fn newest(&self) -> Answer<Option<(String, String)>>;
-    /// what changed from commit `from` to `to`, in words a review reads
-    fn change(&self, from: &str, to: &str) -> Answer<String>;
     /// built once from `commit`, checked, kept: a commit built again is the version already kept, never built twice
     fn build(&self, commit: &str) -> Answer<Built>;
     /// taken: started beside the one running, ready, switched — refused for a commit not built, or built and not holding

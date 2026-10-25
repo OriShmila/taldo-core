@@ -617,9 +617,6 @@ impl Version for FakeVersion {
     fn newest(&self) -> Answer<Option<(String, String)>> {
         done(self.commits.lock().unwrap().last().cloned())
     }
-    fn change(&self, from: &str, to: &str) -> Answer<String> {
-        done(format!("{from}..{to}"))
-    }
     fn build(&self, commit: &str) -> Answer<Built> {
         if let Some(b) = self.built.lock().unwrap().get(commit) {
             return done(b.clone());
