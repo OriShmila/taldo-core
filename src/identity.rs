@@ -141,9 +141,9 @@ fn signer(e: &Value) -> Result<(String, bool), String> {
 static VERIFIED: Mutex<Option<BTreeMap<(String, String), (String, bool)>>> = Mutex::new(None);
 const VERIFIED_AT_MOST: usize = 4_096;
 
-/// THE KEYS THAT SIGN FOR A NODE: its own and every node's above it, and those of whoever carries any of them now — each with
+/// THE KEYS THAT SIGN FOR A NODE: its own and every node's above it, a take-over's that stands, and those of whoever carries any of them now — each with
 /// whether its giver marked it a presence key
-pub(crate) fn keys_for(t: &Twin, by: &str, arrived: i64) -> Vec<(String, bool)> {
+pub fn keys_for(t: &Twin, by: &str, arrived: i64) -> Vec<(String, bool)> {
     let mut nodes = t.chain(by);
     for x in nodes.clone() {
         for c in t.nodes.get(&x).and_then(|n| n.value.get("carried_by")).map(ids_of).unwrap_or_default() {
