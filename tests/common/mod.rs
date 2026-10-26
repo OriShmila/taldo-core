@@ -90,8 +90,8 @@ pub fn tree(g: i64, ids: &[&str]) -> Vec<Value> {
 }
 
 /// A WAY IN FOR ONE MORE PERSON, given by a node that exists (a link, a sign-up): a `join` grant at itself
-pub fn invite(g: i64, by: &str) -> Value {
-    act(g, by, by, "grant", json!({}), json!({ "action": "join" }))
+pub fn invite(g: i64, by: &str, comes: &str) -> Value {
+    act(g, by, by, "grant", json!({}), json!({ "action": "join", "as": comes }))
 }
 /// a person come in by a way in: their own first key, answering it
 pub fn joins(g: i64, person: &str, invite: i64) -> Value {

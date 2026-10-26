@@ -153,11 +153,11 @@ fn a_grant_runs_out_by_when_an_act_arrived_never_by_its_writers_clock() {
 
 #[test]
 fn a_person_comes_in_once_through_a_way_in_that_exists() {
-    let t = with(&[invite(10, ORI), joins(11, "Dana", 10)]);
+    let t = with(&[invite(10, ORI, "Dana"), joins(11, "Dana", 10)]);
     assert!(taken(&t, 11) && t.nodes.contains_key("Dana"), "{}", why(&t, 11));
-    let t = with(&[invite(10, ORI), joins(11, "Dana", 10), joins(12, "Mallory", 10)]);
+    let t = with(&[invite(10, ORI, "Dana"), joins(11, "Dana", 10), joins(12, "Mallory", 10)]);
     assert!(!taken(&t, 12), "one way in let two people in");
-    let t = with(&[invite(10, ORI), act(11, ORI, ORI, "revoke", json!({ "re": 10 }), json!({})), joins(12, "Dana", 10)]);
+    let t = with(&[invite(10, ORI, "Dana"), act(11, ORI, ORI, "revoke", json!({ "re": 10 }), json!({})), joins(12, "Dana", 10)]);
     assert!(!taken(&t, 12), "a way in taken back still let someone in");
 }
 
@@ -177,7 +177,7 @@ fn a_record_folds_by_when_each_row_arrived() {
 #[test]
 fn a_twin_folded_again_from_its_rows_is_the_same() {
     use taldo_core::seams::Store;
-    let log: Vec<Value> = world().into_iter().chain([invite(10, ORI), joins(11, "Dana", 10)]).collect();
+    let log: Vec<Value> = world().into_iter().chain([invite(10, ORI, "Dana"), joins(11, "Dana", 10)]).collect();
     let store = std::sync::Arc::new(taldo_core::fakes::FakeStore::default());
     store.lease("t").unwrap();
     for e in &log {
@@ -206,11 +206,11 @@ fn a_delete_waits_from_when_it_arrived_never_its_writers_clock() {
 #[test]
 fn whoever_joins_proves_the_key_they_name() {
     let unsigned = json!({ "g": 11, "ts": 11, "arrived": 11, "by": "Dana", "at": "Dana", "is": "be", "refs": { "re": 10 }, "value": { "keys": [{ "key": public("Dana") }] } });
-    let t = with(&[invite(10, ORI), unsigned]);
+    let t = with(&[invite(10, ORI, "Dana"), unsigned]);
     assert!(!taken(&t, 11), "someone joined without proving any key");
     let mut other = json!({ "g": 11, "ts": 11, "by": "Dana", "at": "Dana", "is": "be", "refs": { "re": 10 }, "value": { "keys": [{ "key": public("Dana") }] } });
     other = signed_by("Mallory", other);
-    let t = with(&[invite(10, ORI), other]);
+    let t = with(&[invite(10, ORI, "Dana"), other]);
     assert!(!taken(&t, 11), "someone joined signing with a key they do not name");
 }
 
@@ -222,10 +222,59 @@ fn code_never_decides_who_anyone_is_nor_what_runs() {
     for (g, e) in [
         (12, act(12, ENGINE, part, "be", json!({}), json!({ "keys": [{ "key": public("an outsider") }] }))),
         (12, act(12, ENGINE, part, "seal", json!({}), whole.clone())),
-        (12, act(12, ENGINE, ENGINE, "grant", json!({}), json!({ "action": "join" }))),
+        (12, act(12, ENGINE, ENGINE, "grant", json!({}), json!({ "action": "join", "as": "Ori › Taldo › engine › joiner" }))),
         (12, act(12, ENGINE, "Ori › Taldo › engine › new", "make", json!({ "in": ENGINE }), json!({ "kind": "agent", "keys": [] }))),
     ] {
         let t = with(&[sealed.clone(), under(11, part), e.clone()]);
         assert!(!taken(&t, g), "code decided who or what runs: {e}");
+    }
+}
+
+// ─── THE HOLES A REVIEW FOUND (26 Oct): each by what it would do, closed where the rule lives ───
+
+#[test]
+fn a_grant_to_grant_never_reaches_who_a_person_is() {
+    // Mallory, let to write grants at Ori, writes herself a way back to Ori: refused — a way back is set only from above
+    let m = "Ori › beside";
+    let t = with(&[act(10, ORI, ORI, "grant", json!({}), json!({ "to": m, "action": "grant" })), act(11, m, ORI, "grant", json!({}), json!({ "to": m, "action": "take over" }))]);
+    assert!(!taken(&t, 11), "a grant to grant gave a way back into a person");
+}
+
+#[test]
+fn a_way_in_lets_in_only_the_one_it_names_and_no_one_burns_it() {
+    let t = with(&[invite(10, ORI, "Dana"), joins(11, "Mallory", 10), joins(12, "Dana", 10)]);
+    assert!(!taken(&t, 11), "a way in for Dana let Mallory in");
+    assert!(taken(&t, 12), "Dana's way in was burnt by someone else: {}", why(&t, 12));
+    let t = with(&[invite(10, ORI, "Dana"), act(11, ORI, ORI, "be", json!({ "re": 10 }), json!({ "says": "seen" })), joins(12, "Dana", 10)]);
+    assert!(!taken(&t, 11) && taken(&t, 12), "an answer by another used up Dana's way in");
+}
+
+#[test]
+fn what_runs_is_never_ended_under_a_grant() {
+    let keep = act(9, ORI, ORI, "be", json!({}), json!({ "keep_deleted": 1_000 }));
+    let sealed = act(10, TALDO, ENGINE, "seal", json!({}), json!({ "wasm": "a".repeat(64), "cwasm": { "x86_64": "b".repeat(64) }, "contract": "c", "reach": [] }));
+    let grant = act(11, TALDO, ENGINE, "grant", json!({}), json!({ "to": BESIDE, "action": "delete" }));
+    let t = with(&[keep, sealed, grant, act(12, BESIDE, ENGINE, "delete", json!({}), json!({}))]);
+    assert!(!taken(&t, 12) && t.sealed(ENGINE).is_some(), "a grant to delete stopped code that runs");
+}
+
+#[test]
+fn a_person_saying_their_keys_never_starts_nor_ends_a_take_over() {
+    // a way back to a device of Ori's, a take-over through it — then Ori says his keys again, naming only his own
+    const PHONE: &str = "Ori › phone";
+    let way = [make(4, ORI, PHONE, ORI, "device"), act(10, ORI, ORI, "grant", json!({}), json!({ "to": PHONE, "action": "take over" }))];
+    let over = signed_by(PHONE, json!({ "g": 11, "ts": 100, "arrived": 100, "by": ORI, "at": ORI, "is": "takeover", "refs": { "proof": PHONE }, "value": { "keys": [{ "key": public("a new phone") }] } }));
+    let said = signed(json!({ "g": 12, "ts": 101, "arrived": 101, "by": ORI, "at": ORI, "is": "be", "refs": {}, "value": { "keys": [{ "key": public(ORI) }] } }));
+    let t = with(&[way[0].clone(), way[1].clone(), over, said]);
+    assert!(taken(&t, 11) && taken(&t, 12), "{} / {}", why(&t, 11), why(&t, 12));
+    let at = |when: i64| -> Vec<String> { taldo_core::identity::keys_for(&t, ORI, when).into_iter().map(|(k, _)| k).collect() };
+    assert!(!at(200).contains(&public("a new phone")), "a take-over's key signed before its day was out");
+    assert!(at(100 + taldo_core::twin::TAKEOVER_WAITS).contains(&public("a new phone")), "a take-over ended without a no, by a list of keys");
+}
+
+#[test]
+fn a_grant_is_taken_only_whole() {
+    for v in [json!({ "to": BESIDE, "action": "be", "until": "never" }), json!({ "to": BESIDE, "action": "be", "budget": { "max": 3 } }), json!({ "action": "be" }), json!({ "to": BESIDE })] {
+        assert!(!taken(&with(&[act(10, TALDO, ENGINE, "grant", json!({}), v.clone())]), 10), "a grant not whole was taken: {v}");
     }
 }

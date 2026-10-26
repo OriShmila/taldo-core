@@ -14,11 +14,11 @@ fn world() -> Vec<Value> {
     vec![
         common::first_key("ori"),
         // each other person came in by a way in you gave: a link, a sign-up
-        common::invite(901, "ori"),
+        common::invite(901, "ori", "taxowner"),
         common::joins(902, "taxowner", 901),
-        common::invite(903, "ori"),
+        common::invite(903, "ori", "tax2"),
         common::joins(904, "tax2", 903),
-        common::invite(905, "ori"),
+        common::invite(905, "ori", "tax3"),
         common::joins(906, "tax3", 905),
         make(1, "ori", "taldoorg", "ori", "org"),
         make(2, "taldoorg", "agent", "taldoorg", "agent"),

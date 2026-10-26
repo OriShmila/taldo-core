@@ -153,8 +153,8 @@ pub fn keys_for(t: &Twin, by: &str, arrived: i64) -> Vec<(String, bool)> {
     nodes
         .iter()
         .flat_map(|x| {
-            // WHO IT IS, from its one place: each key from when it signs (a take-over's, a day after it arrived)
-            t.nodes.get(x).and_then(|n| n.who.get("keys")).and_then(Value::as_array).cloned().unwrap_or_default().into_iter().filter(move |k| k["from"].as_i64().is_none_or(|f| f <= arrived))
+            // WHO IT IS: its keys as decided from above, and a take-over's once it waited
+            t.nodes.get(x).and_then(|n| n.who.get("keys")).and_then(Value::as_array).cloned().unwrap_or_default().into_iter().chain(t.taken_over(x, arrived))
         })
         .filter_map(|k| Some((k["key"].as_str()?.to_string(), k["presence"] == true)))
         .collect()

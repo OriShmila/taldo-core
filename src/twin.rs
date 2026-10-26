@@ -250,30 +250,57 @@ pub fn kept(e: &Value, arrived: i64) -> Value {
     row["arrived"] = json!(arrived);
     row
 }
-/// WHAT EACH KIND ANSWERS, the one table of it: a kind the core reads as an answer answers only these; any other kind answers any
-/// entry before it, as its writer says
-fn answers(is: &str) -> &'static [&'static str] {
-    match is {
-        "restore" | "purge" => &["delete"],
-        "revoke" => &["grant"],
-        "decline" => &["ask", "takeover"],
-        _ => &[],
+/// WHOSE ANSWER COUNTS, for an answer the table names: by the answered entry's writer or a node above it; at the answered entry's
+/// node or above it; only the one a way in names (`as`); or anyone's
+#[derive(Clone, Copy, PartialEq)]
+enum Whose {
+    Writer,
+    Node,
+    As,
+    Any,
+}
+/// WHAT EACH KIND ANSWERS, AND WHOSE ANSWER COUNTS — the one table of it, held at admission, so every answer in the twin is one that
+/// counts: an undo, a carrying out, a taking back and a no answer only what they name; a delete, a grant and a take-over are answered
+/// only as named here; anything else answers any entry before it, as its writer says. None: it answers no such entry
+fn answering(is: &str, of: &str) -> Option<Whose> {
+    match (is, of) {
+        ("restore", "delete") => Some(Whose::Writer),
+        ("purge", "delete") => Some(Whose::Any),
+        ("revoke", "grant") => Some(Whose::Writer),
+        ("decline", "ask") => Some(Whose::Any),
+        ("decline", "takeover") => Some(Whose::Node),
+        // a person come in by a way in: their first key, answering the join grant that named them
+        ("be", "grant") => Some(Whose::As),
+        ("restore" | "purge" | "revoke" | "decline", _) | (_, "delete" | "grant" | "takeover") => None,
+        _ => Some(Whose::Any),
     }
 }
-/// WHAT AN ENTRY DECIDES OF A NODE — what it runs (a seal), who it is (a make or a `be` saying its keys, who carries it, what stays
-/// when it is deleted; a take-over bringing keys), or who may come to be or come back (a way in, a way back) — every door to who and
-/// what runs, named in one place, so `may_decide` is the one test of them all
-fn decides(e: &Value) -> Option<&'static str> {
-    match e["is"].as_str().unwrap_or("") {
-        "seal" => Some("code"),
-        "takeover" => Some("keys"),
-        "grant" if e["value"]["action"] == "join" => Some("way in"),
-        "grant" if e["value"]["action"] == "take over" => Some("way back"),
-        "be" | "make" => GOVERNING.iter().find(|k| e["value"].get(**k).is_some()).copied(),
-        _ => None,
+/// A GRANT, WHOLE: what it lets (`action`); to whom — a node that is (`to`), or for a way in, the one new id it lets come to be
+/// (`as`); until when (`until`, a time), whether it reaches below (`below`), and a budget (`{ field, max, window? }`) — or why not.
+/// Nothing in it is read as a default
+fn grant_whole(v: &Value) -> Result<(), String> {
+    let action = v["action"].as_str().filter(|a| !a.is_empty()).ok_or("a grant says what it lets (action)")?;
+    if action == "join" {
+        if v["as"].as_str().is_none_or(str::is_empty) || v.get("to").is_some() {
+            return Err("a way in names the one who comes in by it (as), and gives nothing to a node that is".into());
+        }
+    } else if parse_id(&v["to"]).is_none() {
+        return Err(format!("a grant to {action} names whom it lets (to)"));
     }
+    if v.get("until").is_some_and(|u| !u.is_i64()) {
+        return Err("a grant's until is a time".into());
+    }
+    if v.get("below").is_some_and(|b| !b.is_boolean()) {
+        return Err("a grant's below is yes or no".into());
+    }
+    if let Some(b) = v.get("budget") {
+        let whole = b["field"].as_str().is_some_and(|f| !f.is_empty()) && b["max"].is_number() && b.get("window").is_none_or(Value::is_i64);
+        if !whole {
+            return Err("a grant's budget says its field, its max, and maybe its window (a time)".into());
+        }
+    }
+    Ok(())
 }
-
 impl Twin {
     /// WHAT HOLDS A NODE: its parent — none for a person, or a node never made
     pub fn parent(&self, id: &str) -> Option<String> {
@@ -364,11 +391,11 @@ impl Twin {
         }
         self.at_kind(node, "seal").next_back().map(|(g, _)| g)
     }
-    /// A WAY IN, OPEN: the `join` grant this first key answers (`refs.re`) — in force, not run out at `arrived`, and not used by
-    /// anyone yet
+    /// A WAY IN, OPEN: the `join` grant this first key answers (`refs.re`), naming it (`as`) — in force, not run out at `arrived`,
+    /// and not used yet
     fn way_in(&self, e: &Value, arrived: i64) -> bool {
         let Some(g) = e["refs"]["re"].as_i64() else { return false };
-        let Some(j) = self.entries.get(&g).filter(|j| j["is"] == "grant" && j["value"]["action"] == "join") else { return false };
+        let Some(j) = self.entries.get(&g).filter(|j| j["is"] == "grant" && j["value"]["action"] == "join" && j["value"]["as"] == e["by"]) else { return false };
         let used = self.answers.get(&g).into_iter().flatten().any(|x| self.is(*x) == "be");
         self.grant_in_force(g, &j, arrived) && !used
     }
@@ -376,13 +403,20 @@ impl Twin {
     fn grant_in_force(&self, g: i64, grant: &Value, arrived: i64) -> bool {
         !self.revoked(g) && grant["value"]["until"].as_i64().is_none_or(|u| arrived < u)
     }
-    /// THE ONE TEST OF WHO AND WHAT RUNS (`decides`): never by a node that runs code — code is what runs, never who decides; a
-    /// take-over only by a person for themselves, bringing only keys; a way back only at a person, to a person, a device, a recovery
-    /// code or a proof; a way in by any node that exists; anything else from above — for a node being made, its maker at or above
-    /// where it is made; a person says who they are themselves
+    /// THE ONE TEST OF WHO AND WHAT RUNS (`decides`): always from above — its writer above the node (a person for themselves), or for
+    /// a node being made, at or above where it is made — and never by a node that runs code: code is what runs, never who decides.
+    /// Each kind may only narrow it: a take-over brings only keys, by a person for themselves; a way back is a person's, to a person,
+    /// a device, a recovery code or a proof of theirs
     fn may_decide(&self, e: &Value, what: &str, by: &str, at: &str, root: bool) -> Result<(), String> {
         if self.sealed(by).is_some() {
             return Err(format!("{by} runs code: it never decides {what}"));
+        }
+        let above = match e["is"].as_str().unwrap_or("") {
+            "make" => self.within(&id_of(&e["refs"]["in"]), by),
+            _ => root || self.from_above(at, by),
+        };
+        if !above {
+            return Err(format!("the {what} of {at} is set only from above it — never by itself, and never under a grant"));
         }
         let person = |n: &str| self.parent(n).is_none();
         match e["is"].as_str().unwrap_or("") {
@@ -391,7 +425,6 @@ impl Twin {
                 if at != by || !only_keys || !person(at) {
                     return Err(format!("a take-over brings only keys, by a person for themselves — {at} is not taken over"));
                 }
-                Ok(())
             }
             "grant" if what == "way back" => {
                 let to = id_of(&e["value"]["to"]);
@@ -399,13 +432,32 @@ impl Twin {
                 if !person(at) || !ok {
                     return Err(format!("a way back is a person's, to a person, a device, a recovery code or a proof of theirs — not {to} at {at}"));
                 }
-                Ok(())
             }
-            "grant" => Ok(()),
-            "make" if self.within(&id_of(&e["refs"]["in"]), by) => Ok(()),
-            "make" => Err(format!("the {what} of {at} is set only from above it — never by itself, and never under a grant")),
-            _ if root || self.from_above(at, by) => Ok(()),
-            _ => Err(format!("the {what} of {at} is set only from above it — never by itself, and never under a grant")),
+            _ => {}
+        }
+        Ok(())
+    }
+    /// WHAT AN ENTRY DECIDES OF A NODE, BY WHAT IT DOES: what runs (a seal; a delete, a block or an undo of one over code that runs),
+    /// who it is (a make or a `be` saying its keys, who carries it, what stays when it is deleted; a take-over bringing keys, or a
+    /// no to one), who may come to be or come back (a way in, a way back, or taking one back) — so `may_decide` is the one test of
+    /// every entry that changes `sealed` or `keys_for`
+    fn decides(&self, e: &Value) -> Option<&'static str> {
+        let at = id_of(&e["at"]);
+        let answered = e["refs"]["re"].as_i64().and_then(|g| self.entries.get(&g));
+        let way = |g: &Value| match g["value"]["action"].as_str() {
+            Some("join") => Some("way in"),
+            Some("take over") => Some("way back"),
+            _ => None,
+        };
+        match e["is"].as_str().unwrap_or("") {
+            "seal" => Some("code"),
+            "takeover" => Some("keys"),
+            "grant" => way(e),
+            "be" | "make" => GOVERNING.iter().find(|k| e["value"].get(**k).is_some()).copied(),
+            "delete" | "block" | "restore" if self.nodes.contains_key(&at) && self.subtree(&at).iter().any(|x| self.at_kind(x, "seal").next().is_some()) => Some("code"),
+            "revoke" => answered.filter(|g| g["is"] == "grant").and_then(|g| way(&g)),
+            "decline" if answered.is_some_and(|g| g["is"] == "takeover") => Some("keys"),
+            _ => None,
         }
     }
     /// SET FROM ABOVE: `by` is a node above `at` — or `at` itself when nothing is above it (a person says who they are)
@@ -419,9 +471,18 @@ impl Twin {
     pub fn blocked(&self, id: &str) -> bool {
         self.chain(id).iter().any(|x| self.at_kind(x, "block").next().is_some())
     }
+    /// THE KEYS A TAKE-OVER BRINGS A PERSON, read from the record whenever they are asked: each take-over at them not declined, its
+    /// keys signing from a day after it arrived (`TAKEOVER_WAITS`) — never written into who they are, so nothing a person writes of
+    /// their keys starts or ends one
+    pub fn taken_over(&self, person: &str, arrived: i64) -> Vec<Value> {
+        self.at_kind(person, "takeover")
+            .filter(|(g, t)| self.answers.get(g).is_none_or(|a| !a.iter().any(|x| self.is(*x) == "decline")) && t["arrived"].as_i64().expect("an entry taken carries when it arrived") + TAKEOVER_WAITS <= arrived)
+            .flat_map(|(_, t)| t["value"]["keys"].as_array().cloned().unwrap_or_default())
+            .collect()
+    }
     /// WHETHER `proof` IS A WAY BACK `person` GRANTED, in force when `arrived`: a take-over grant at them, to it
     pub(crate) fn takeover_granted(&self, person: &str, proof: &str, arrived: i64) -> bool {
-        self.grants_on(person, arrived).into_iter().any(|g| self.e(g)["value"]["action"] == "take over" && id_of(&self.e(g)["value"]["to"]) == proof)
+        !self.grants_for(person, "take over", proof, arrived).is_empty()
     }
     /// THE KIND A NODE WAS LET IN BY: the `identity` node its make names (`refs.as`)
     fn let_in_as(&self, id: &str) -> Option<String> {
@@ -710,14 +771,12 @@ impl Twin {
                 let Some(d) = d.filter(|d| !self.restored(*d) && !self.purged(*d)) else {
                     return Err(json!({ "g": e["g"], "why": format!("no delete in force at {at} for it to answer") }));
                 };
-                // a delete is undone only by whoever deleted, or a node above them — never by what it hid
-                let deleter = id_of(&self.e(d)["by"]);
-                if e["is"] == "restore" && !self.within(&deleter, &by) {
-                    return Err(json!({ "g": e["g"], "why": format!("{at} was deleted by {deleter}: only it, or a node above it, answers that delete") }));
-                }
                 if e["is"] == "purge" {
                     let deleted_at = self.e(d)["arrived"].as_i64().expect("an entry taken carries when it arrived");
-                    let due = deleted_at.saturating_add(self.keep_for(&at).unwrap_or(i64::MAX));
+                    let Some(keep) = self.keep_for(&at) else {
+                        return Err(json!({ "g": e["g"], "why": format!("nothing says how long the deletion of {at} waits (keep_deleted): it is not erased") }));
+                    };
+                    let due = deleted_at.saturating_add(keep);
                     if arrived < due {
                         return Err(json!({ "g": e["g"], "why": format!("the deletion of {at} waits until {due}") }));
                     }
@@ -740,7 +799,7 @@ impl Twin {
             return Err(json!({ "g": e["g"], "why": format!("{by} is blocked: it signs nothing from then on") }));
         }
         // WHO A NODE IS AND WHAT IT RUNS: every door to them (`decides`) through the one test (`may_decide`)
-        if let Some(what) = decides(e) {
+        if let Some(what) = self.decides(e) {
             if let Err(why) = self.may_decide(e, what, &by, &at, root) {
                 return Err(json!({ "g": e["g"], "why": why }));
             }
@@ -752,13 +811,24 @@ impl Twin {
         }
         // AN ANSWER ANSWERS WHAT IT NAMES IN `re`: an entry before it, of the kind it answers
         if let Some(re) = e["refs"]["re"].as_i64() {
-            let answered = (re < e["g"].as_i64().expect("check: an entry has its number")).then(|| self.entries.get(&re)).flatten().map(|x| x["is"].as_str().unwrap_or("").to_string());
-            let Some(kind) = answered else {
+            let Some(x) = (re < e["g"].as_i64().expect("check: an entry has its number")).then(|| self.entries.get(&re)).flatten() else {
                 return Err(json!({ "g": e["g"], "why": format!("it answers #{re}, which is no entry before it") }));
             };
-            let of = answers(e["is"].as_str().unwrap_or(""));
-            if !of.is_empty() && !of.contains(&kind.as_str()) {
-                return Err(json!({ "g": e["g"], "why": format!("a {} answers a {}, and #{re} is a {kind}", e["is"], of.join(" or ")) }));
+            let (is, kind) = (e["is"].as_str().unwrap_or(""), x["is"].as_str().unwrap_or(""));
+            let not = match answering(is, kind) {
+                None => Some(format!("a {is} does not answer a {kind} (#{re})")),
+                Some(Whose::Writer) => (!self.within(&id_of(&x["by"]), &by)).then(|| format!("#{re} was written by {}: only it, or a node above it, answers it with a {is}", id_of(&x["by"]))),
+                Some(Whose::Node) => (!self.within(&id_of(&x["at"]), &by)).then(|| format!("#{re} is at {}: only it, or a node above it, answers it with a {is}", id_of(&x["at"]))),
+                Some(Whose::As) => (x["value"]["action"] != "join" || x["value"]["as"] != json!(by)).then(|| format!("#{re} is no way in for {by}")),
+                Some(Whose::Any) => None,
+            };
+            if let Some(why) = not {
+                return Err(json!({ "g": e["g"], "why": why }));
+            }
+        }
+        if e["is"] == "grant" {
+            if let Err(why) = grant_whole(&e["value"]) {
+                return Err(json!({ "g": e["g"], "why": why }));
             }
         }
         if e["is"] == "seal" {
@@ -794,6 +864,11 @@ impl Twin {
             .filter(|(g, e)| self.grant_in_force(*g, e, arrived))
             .map(|(g, _)| g)
             .collect()
+    }
+    /// THE GRANTS IN FORCE LETTING `by` DO `action` ON `on`, as of `arrived`: at `on` or reaching below to it, to `by` or a node
+    /// above it — the one query of who a grant lets do what
+    pub fn grants_for(&self, on: &str, action: &str, by: &str, arrived: i64) -> Vec<i64> {
+        self.grants_on(on, arrived).into_iter().filter(|g| { let v = &self.e(*g)["value"]; v["action"] == action && parse_id(&v["to"]).is_some_and(|to| self.within(by, &to)) }).collect()
     }
     /// a grant revoked: a `revoke` answering it, by its writer or a node above them
     fn revoked(&self, g: i64) -> bool {
@@ -832,16 +907,14 @@ impl Twin {
         // WHY NOT, said as it is: a grant that named this once and is no longer in force, or none ever
         let once = self.chain(on).iter().flat_map(|x| self.at_kind(x, "grant").map(|(g, _)| g).collect::<Vec<_>>()).any(|g| { let v = &self.e(g)["value"]; v["action"] == is && self.within(by, &id_of(&v["to"])) });
         let mut why = if once { format!("the grant that let {by} {is} {on} ran out, or was taken back") } else { format!("no grant lets {by} {is} {on}") };
-        for g in self.grants_on(on, arrived) {
+        for g in self.grants_for(on, is, by, arrived) {
             let v = self.e(g)["value"].clone();
             let to = id_of(&v["to"]);
-            if to.is_empty() || !self.within(by, &to) || v["action"] != is {
-                continue;
-            }
+            // its budget was taken whole (`grant_whole`): its field, its max, its window
             if let Some(b) = v["budget"].as_object() {
-                let field = b.get("field").and_then(Value::as_str).unwrap_or("");
-                let max = b.get("max").and_then(Value::as_f64).unwrap_or(0.0);
-                let from = b.get("window").and_then(Value::as_i64).map(|w| arrived - w);
+                let field = b["field"].as_str().expect("a grant's budget, taken whole, says its field");
+                let max = b["max"].as_f64().expect("a grant's budget, taken whole, says its max");
+                let from = b.get("window").map(|w| arrived - w.as_i64().expect("a grant's window, taken whole, is a time"));
                 let earlier = self.spent(is, &to, on, field, from);
                 if earlier >= max {
                     why = format!("the grant ({g}) that let {to} {is} {on} is over its budget: {earlier} of {max} {field}");
@@ -902,25 +975,6 @@ impl Twin {
             }
         }
         match e["is"].as_str().unwrap_or("") {
-            // A TAKE-OVER'S KEYS join who the person is, each signing only a day after it arrived, and only while not declined
-            "takeover" => {
-                let from = arrived + TAKEOVER_WAITS;
-                let n = self.nodes.get_mut(&at).unwrap();
-                let mut ks = n.who.get("keys").and_then(Value::as_array).cloned().unwrap_or_default();
-                ks.extend(e["value"]["keys"].as_array().into_iter().flatten().map(|k| { let mut k = k.clone(); k["from"] = json!(from); k["takeover"] = json!(g); k }));
-                n.who.insert("keys".into(), Value::Array(ks));
-            }
-            // A TAKE-OVER DECLINED by the person or above them: its keys leave who they are
-            "decline" if e["refs"]["re"].as_i64().is_some_and(|t| self.is(t) == "takeover") => {
-                let t = e["refs"]["re"].as_i64().expect("checked");
-                let person = id_of(&self.e(t)["at"]);
-                if self.within(&person, &by) {
-                    let n = self.nodes.get_mut(&person).unwrap();
-                    let ks: Vec<Value> = n.who.get("keys").and_then(Value::as_array).cloned().unwrap_or_default().into_iter().filter(|k| k["takeover"] != json!(t)).collect();
-                    n.who.insert("keys".into(), Value::Array(ks));
-                    touched.insert(person);
-                }
-            }
             "be" | "make" => {
                 let n = self.nodes.get_mut(&at).unwrap();
                 n.who = said_who(std::mem::take(&mut n.who), e);

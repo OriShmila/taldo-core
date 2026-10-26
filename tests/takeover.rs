@@ -14,9 +14,9 @@ fn world() -> Vec<Value> {
     vec![
         common::first_key("noa"),
         // the others came in by ways in Noa gave
-        common::invite(901, "noa"),
+        common::invite(901, "noa", "sister"),
         common::joins(902, "sister", 901),
-        common::invite(903, "noa"),
+        common::invite(903, "noa", "stranger"),
         common::joins(904, "stranger", 903),
         make(1, "noa", "org", "noa", "org"),
         make(2, "org", "agent", "org", "agent"),
