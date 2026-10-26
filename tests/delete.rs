@@ -103,3 +103,15 @@ fn a_purge_erases_what_it_held_after_the_waiting_and_keeps_the_skeleton() {
     let t = with(&[keep(19), delete(20, 20, "dana"), undone, purge(22, 20 + KEEP)]);
     assert!(!taken(&t, 22), "a purge erased what was brought back");
 }
+
+#[test]
+fn only_who_deleted_undoes_it() {
+    // the owner deleted the case: the org under them, though the case is its own, never brings it back nor erases it
+    let below = act(21, "taxorg", "case", "restore", json!({ "re": 20 }), json!({}));
+    let t = with(&[keep(19), delete(20, 20, "case"), below]);
+    assert!(!taken(&t, 21) && why(&t, 21).contains("only it, or a node above it"), "what was under the deleter undid its delete: {}", why(&t, 21));
+    assert!(t.deleted("case"), "the case came back by a restore from under who deleted it");
+    let own = common::touched(json!({ "g": 21, "ts": 21, "by": "taxowner", "at": "case", "is": "restore", "refs": { "re": 20 }, "value": {} }));
+    let t = with(&[keep(19), delete(20, 20, "case"), own]);
+    assert!(taken(&t, 21) && !t.deleted("case"), "who deleted it could not bring it back: {}", why(&t, 21));
+}

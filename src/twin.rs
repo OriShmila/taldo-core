@@ -99,8 +99,8 @@ pub struct Twin {
     pub kids: OrdMap<String, OrdSet<String>>,
     /// the entries taken, by number: all in memory when folded from a list, else read from their rows (`rows`)
     pub entries: Entries,
-    /// the entries that point to an entry, by any role
-    pub answers: OrdMap<i64, Vector<i64>>,
+    /// the entries that point to an entry, by any role — read through `answers_from`, which says from whom
+    pub(crate) answers: OrdMap<i64, Vector<i64>>,
     /// entries that are not entries, and why
     pub rejected: Vector<Value>,
     /// each node's own work, in order
@@ -252,9 +252,20 @@ impl Twin {
     pub fn name(&self, id: &str) -> Option<String> {
         self.nodes.get(id)?.value.get("name")?.as_str().map(String::from)
     }
-    /// a delete brought back: a `restore` answering it
+    /// THE ANSWERS TO AN ENTRY FROM WHOEVER IT IS FOR: each entry answering `g` — of kind `is`, or of any kind when it is "" — written by
+    /// `who` or a node above them. The one way to read an answer: every reader says whose answer counts, so none forgets to
+    pub fn answers_from(&self, g: i64, is: &str, who: &str) -> Vec<i64> {
+        let of = |x: &i64| (is.is_empty() || self.is(*x) == is) && self.within(who, &id_of(&self.e(*x)["by"]));
+        self.answers.get(&g).into_iter().flatten().copied().filter(of).collect()
+    }
+    /// a delete brought back: a `restore` answering it, by whoever deleted or a node above them
     fn restored(&self, d: i64) -> bool {
-        self.answers.get(&d).into_iter().flatten().any(|x| self.is(*x) == "restore")
+        !self.answers_from(d, "restore", &id_of(&self.e(d)["by"])).is_empty()
+    }
+    /// a delete carried out: a `purge` answering it — any taken, since one is taken only once the waiting is over and naming what it
+    /// erases; it undoes nothing
+    fn purged(&self, d: i64) -> bool {
+        self.answers.get(&d).into_iter().flatten().any(|x| self.is(*x) == "purge")
     }
     /// THE DELETES IN FORCE AT A NODE: not brought back
     fn deletes_at(&self, id: &str) -> Vec<i64> {
@@ -310,7 +321,7 @@ impl Twin {
     pub(crate) fn taken_over(&self, id: &str, arrived: i64) -> Vec<Value> {
         self.at_kind(id, "takeover")
             .filter(|(g, _)| self.arrivals.get(g).is_some_and(|a| a + TAKEOVER_WAITS <= arrived))
-            .filter(|(g, _)| !self.answers.get(g).into_iter().flatten().any(|x| self.is(*x) == "decline" && self.within(id, &id_of(&self.e(*x)["by"]))))
+            .filter(|(g, _)| self.answers_from(*g, "decline", id).is_empty())
             .flat_map(|(_, e)| e["value"]["keys"].as_array().cloned().unwrap_or_default())
             .collect()
     }
@@ -589,9 +600,14 @@ impl Twin {
             }
             "restore" | "purge" => {
                 let d = e["refs"]["re"].as_i64().filter(|d| self.is(*d) == "delete" && self.entries.get(d).is_some_and(|x| id_of(&x["at"]) == at));
-                let Some(d) = d.filter(|d| !self.restored(*d) && !self.answers.get(d).into_iter().flatten().any(|x| self.is(*x) == "purge")) else {
+                let Some(d) = d.filter(|d| !self.restored(*d) && !self.purged(*d)) else {
                     return Err(json!({ "g": e["g"], "why": format!("no delete in force at {at} for it to answer") }));
                 };
+                // a delete is undone only by whoever deleted, or a node above them — never by what it hid
+                let deleter = id_of(&self.e(d)["by"]);
+                if e["is"] == "restore" && !self.within(&deleter, &by) {
+                    return Err(json!({ "g": e["g"], "why": format!("{at} was deleted by {deleter}: only it, or a node above it, answers that delete") }));
+                }
                 if e["is"] == "purge" {
                     let due = self.e(d)["ts"].as_i64().unwrap_or(0) + self.keep_for(&at).unwrap_or(i64::MAX - self.e(d)["ts"].as_i64().unwrap_or(0));
                     if arrived < due {
@@ -696,12 +712,7 @@ impl Twin {
     }
     /// a grant revoked: a `revoke` answering it, by its writer or a node above them
     fn revoked(&self, g: i64) -> bool {
-        let writer = id_of(&self.e(g)["by"]);
-        self.answers
-            .get(&g)
-            .into_iter()
-            .flatten()
-            .any(|x| self.is(*x) == "revoke" && self.within(&writer, &id_of(&self.e(*x)["by"])))
+        !self.answers_from(g, "revoke", &id_of(&self.e(g)["by"])).is_empty()
     }
     /// HOW MUCH OF A BUDGET IS SPENT: `field` added over every act of kind `is` by `to` or under it on `on`, since `from` (by the acts'
     /// own time) — what a grant's budget is held against, and what a screen says of it
@@ -1097,9 +1108,7 @@ impl Twin {
     /// declined by whoever holds it
     fn declined_by(&self, g: i64, h: &str) -> bool {
         // by its holder, or a level above it — you are above every hand
-        self.answers.get(&g).into_iter().flatten().any(|x| {
-            self.e(*x)["is"] == "decline" && self.within(h, &id_of(&self.e(*x)["by"]))
-        })
+        !self.answers_from(g, "decline", h).is_empty()
     }
     /// AN ASK IS OPEN until its thing moved or its holder declined it — and an ask that is evidence on another is never open itself
     pub fn ask_open(&self, g: i64) -> bool {
