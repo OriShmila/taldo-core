@@ -42,8 +42,7 @@ pub enum Unwritten {
 impl core::fmt::Display for Unwritten {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Unwritten::Refused(why) => write!(f, "refused: {why}"),
-            Unwritten::Failed(why) => write!(f, "{why}"),
+            Unwritten::Refused(why) | Unwritten::Failed(why) => f.write_str(why),
         }
     }
 }
