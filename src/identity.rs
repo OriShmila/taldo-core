@@ -153,9 +153,8 @@ pub fn keys_for(t: &Twin, by: &str, arrived: i64) -> Vec<(String, bool)> {
     nodes
         .iter()
         .flat_map(|x| {
-            let mut ks = t.nodes.get(x).and_then(|n| n.who.get("keys")).and_then(Value::as_array).cloned().unwrap_or_default();
-            ks.extend(t.taken_over(x, arrived));
-            ks
+            // WHO IT IS, from its one place: each key from when it signs (a take-over's, a day after it arrived)
+            t.nodes.get(x).and_then(|n| n.who.get("keys")).and_then(Value::as_array).cloned().unwrap_or_default().into_iter().filter(move |k| k["from"].as_i64().is_none_or(|f| f <= arrived))
         })
         .filter_map(|k| Some((k["key"].as_str()?.to_string(), k["presence"] == true)))
         .collect()
@@ -165,7 +164,7 @@ pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<bool, String> {
     let by = parse_id(&e["by"]).ok_or("by is not a node")?;
     // A TAKE-OVER is signed by the way back it names, when its person granted that way
     let keys = match parse_id(&e["refs"]["proof"]).filter(|_| e["is"] == "takeover") {
-        Some(p) if t.takeover_granted(&by, &p) => keys_for(t, &p, arrived),
+        Some(p) if t.takeover_granted(&by, &p, arrived) => keys_for(t, &p, arrived),
         Some(p) => return Err(format!("{p} is not a way back {by} granted")),
         None => keys_for(t, &by, arrived),
     };

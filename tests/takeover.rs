@@ -52,7 +52,7 @@ fn a_take_over_goes_only_to_a_person_a_device_or_a_proof_never_to_who_runs_her_t
     for (g, to) in [(11, "org"), (12, "agent")] {
         let t = with(&[grant(g, to)]);
         assert!(!taken(&t, g), "a take-over was granted to {to}");
-        assert!(why(&t, g).contains("never"), "{}", why(&t, g));
+        assert!(why(&t, g).contains("a way back is a person"), "{}", why(&t, g));
     }
 }
 

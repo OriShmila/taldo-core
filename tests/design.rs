@@ -213,3 +213,19 @@ fn whoever_joins_proves_the_key_they_name() {
     let t = with(&[invite(10, ORI), other]);
     assert!(!taken(&t, 11), "someone joined signing with a key they do not name");
 }
+
+#[test]
+fn code_never_decides_who_anyone_is_nor_what_runs() {
+    let whole = json!({ "program": { "x86_64-linux": "a".repeat(64) } });
+    let sealed = act(10, TALDO, ENGINE, "seal", json!({}), json!({ "wasm": "a".repeat(64), "cwasm": { "x86_64": "b".repeat(64) }, "contract": "c", "reach": [] }));
+    let part = "Ori › Taldo › engine › part";
+    for (g, e) in [
+        (12, act(12, ENGINE, part, "be", json!({}), json!({ "keys": [{ "key": public("an outsider") }] }))),
+        (12, act(12, ENGINE, part, "seal", json!({}), whole.clone())),
+        (12, act(12, ENGINE, ENGINE, "grant", json!({}), json!({ "action": "join" }))),
+        (12, act(12, ENGINE, "Ori › Taldo › engine › new", "make", json!({ "in": ENGINE }), json!({ "kind": "agent", "keys": [] }))),
+    ] {
+        let t = with(&[sealed.clone(), under(11, part), e.clone()]);
+        assert!(!taken(&t, g), "code decided who or what runs: {e}");
+    }
+}
