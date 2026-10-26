@@ -4,7 +4,7 @@
 //! when asked for. Memory then stays flat as history grows. The core never touches a file: the source is the program's.
 use serde_json::Value;
 use imbl::{OrdMap, Vector};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::{Bound, RangeBounds};
 use std::sync::{Arc, Mutex};
 
@@ -245,7 +245,10 @@ impl Entries {
         }
         // the rows' own index holds no overlay's entries: an overlay walks them
         if let Some(gs) = self.source.as_ref().filter(|_| !self.overlay).and_then(|s| s.having(field)) {
-            return gs.into_iter().filter(|g| self.contains_key(g)).collect();
+            // the rows' index, but for what is taken and not kept yet: read as it is now
+            let mut all: BTreeSet<i64> = gs.into_iter().filter(|g| !self.pending.contains_key(g)).collect();
+            all.extend(self.pending.iter().filter(|(_, e)| !e["value"][field].is_null()).map(|(g, _)| *g));
+            return all.into_iter().filter(|g| self.contains_key(g)).collect();
         }
         self.iter().filter(|(_, e)| !e["value"][field].is_null()).map(|(g, _)| g).collect()
     }
@@ -371,14 +374,21 @@ impl Iter<'_> {
         if if newest_first { self.hi <= rows_to } else { self.lo <= rows_to } {
             let src = es.source.as_ref().expect("rows are read only from a source");
             let hi = self.hi.min(rows_to);
-            let rows = src.page(self.lo, hi, newest_first, PAGE);
-            // the last row read bounds what was read, entries or not
+            let (lo, rows) = (self.lo, src.page(self.lo, hi, newest_first, PAGE));
+            // the last row read bounds what was read, entries or not — with no row left, the rest of the span
             let edge = rows.last().map(|(g, _)| *g);
-            let out: Vec<(i64, Arc<Value>)> = rows
-                .into_iter()
-                .filter(|(g, _)| es.contains_key(g))
-                .map(|(g, v)| (g, Arc::new(v)))
-                .collect();
+            let (from, to) = match (edge, newest_first) {
+                (Some(e), false) => (lo, e),
+                (Some(e), true) => (e, hi),
+                (None, _) => (lo, hi),
+            };
+            // AS `get` READS THEM: an entry taken and not kept yet from its own home first, else its row
+            let mut span: BTreeMap<i64, Arc<Value>> = rows.into_iter().map(|(g, v)| (g, Arc::new(v))).collect();
+            span.extend(es.pending.range(from..=to).map(|(g, v)| (*g, v.clone())));
+            let mut out: Vec<(i64, Arc<Value>)> = span.into_iter().filter(|(g, _)| es.contains_key(g)).collect();
+            if newest_first {
+                out.reverse();
+            }
             match (edge, newest_first) {
                 (None, false) => self.lo = hi + 1,
                 (None, true) => self.hi = self.lo - 1,

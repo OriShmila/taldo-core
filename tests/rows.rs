@@ -141,7 +141,7 @@ fn a_twin_kept_as_rows_is_the_twin_folded_from_the_list() {
     let mut t = Twin::stored(rows.clone());
     t.entries.index(&["says", "keys"]);
     for e in &log {
-        take(&mut t, &rows, e, e["ts"].as_i64().unwrap());
+        take(&mut t, &rows, e, e["arrived"].as_i64().unwrap());
     }
     // a detail kept at hand finds what walking the entries finds
     for f in ["says", "keys", "moves"] {
@@ -169,7 +169,7 @@ fn a_twin_started_again_from_its_state_is_the_same_twin() {
         let rows = Arc::new(Rows::default());
         let mut t = Twin::stored(rows.clone());
         for e in &log[..cut] {
-            take(&mut t, &rows, e, e["ts"].as_i64().unwrap());
+            take(&mut t, &rows, e, e["arrived"].as_i64().unwrap());
         }
         if cut > 9 {
             t.entries.index(&["says"]);
@@ -179,7 +179,7 @@ fn a_twin_started_again_from_its_state_is_the_same_twin() {
         assert_eq!(said(&again), said(&t), "started again at {cut}");
         assert_eq!(again.entries.having("says"), t.entries.having("says"), "started again at {cut}");
         for e in &log[cut..] {
-            take(&mut again, &rows, e, e["ts"].as_i64().unwrap());
+            take(&mut again, &rows, e, e["arrived"].as_i64().unwrap());
         }
         assert_eq!(said(&again), said(&folded), "started again at {cut}, then the rest");
         assert_eq!(again.entries.having("says"), folded.entries.having("says"), "started again at {cut}, then the rest");
@@ -278,7 +278,7 @@ fn an_overlay_says_what_the_whole_record_says_and_leaves_its_twin_as_it_was() {
         let mut base = Twin::stored(rows.clone());
         base.entries.index(&["says"]);
         for e in &log[..k] {
-            take(&mut base, &rows, e, e["ts"].as_i64().unwrap());
+            take(&mut base, &rows, e, e["arrived"].as_i64().unwrap());
         }
         let (before, kept) = (said(&base), rows.0.lock().unwrap().len());
         let mut o = base.overlay();
@@ -301,7 +301,7 @@ fn an_overlay_of_rows_keeps_every_entry_it_took() {
     let rows = Arc::new(Rows::default());
     let mut base = Twin::stored(rows.clone());
     for e in &log {
-        take(&mut base, &rows, e, e["ts"].as_i64().unwrap());
+        take(&mut base, &rows, e, e["arrived"].as_i64().unwrap());
     }
     let top = base.entries.top();
     let s = "Ori › Claude Code › session a";
@@ -331,7 +331,7 @@ fn an_overlay_takes_a_signed_act_once() {
     let rows = Arc::new(Rows::default());
     let mut base = Twin::stored(rows.clone());
     for e in &log {
-        take(&mut base, &rows, e, e["ts"].as_i64().unwrap());
+        take(&mut base, &rows, e, e["arrived"].as_i64().unwrap());
     }
     let top = base.entries.top();
     let s = "Ori › Claude Code › session a";

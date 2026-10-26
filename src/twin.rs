@@ -197,10 +197,23 @@ fn meets(c: &Value, details: &dyn Fn(&str) -> Map<String, Value>) -> bool {
     let d = details(&id_of(&c["expect"]["at"]));
     has.iter().all(|(k, x)| d.get(k) == Some(x))
 }
-/// WHO A NODE IS, as its details: the keys it signs with, who carries it, what stays when it is deleted — and, for a whole program,
-/// where it runs (`host`, `user` and `key`: its server and how it is reached; `vm`: its box there; `machine`: which of its sealed
-/// programs runs) — set from above (`from_above`), never by the node itself nor under a grant
-pub const GOVERNING: [&str; 8] = ["keys", "carried_by", "keep_deleted", "host", "user", "key", "vm", "machine"];
+/// WHO A NODE IS, as its details: the keys it signs with, who carries it, what stays when it is deleted — and, for a node a whole
+/// program runs as, where it runs (`place`: `place_whole`) — set from above (`from_above`), never by the node itself nor under a grant
+pub const GOVERNING: [&str; 4] = ["keys", "carried_by", "keep_deleted", "place"];
+/// WHERE A WHOLE PROGRAM RUNS, WHOLE: its server (`host`) and how it is reached (`user`, `key`: the key that reaches it), its box there
+/// (`vm`), and which of its sealed programs runs (`machine`) — each said, and nothing else
+fn place_whole(p: &Value) -> Result<(), String> {
+    let o = p.as_object().ok_or("a place is its host, user, key, vm and machine")?;
+    for k in ["host", "user", "key", "vm", "machine"] {
+        if o.get(k).and_then(Value::as_str).is_none_or(str::is_empty) {
+            return Err(format!("a place says its {k}"));
+        }
+    }
+    if let Some(k) = o.keys().find(|k| !["host", "user", "key", "vm", "machine"].contains(&k.as_str())) {
+        return Err(format!("a place says nothing but where a program runs — not {k}"));
+    }
+    Ok(())
+}
 /// A SEAL IS WHOLE: level code — `wasm`, the module's hash; `cwasm`, its ready machine code's hash for each machine; `contract`, what it
 /// was built to; `reach`, what it may call — or a whole program, `program`: its hash for each machine; and nothing else
 fn seal_whole(v: &Value) -> Result<(), String> {
@@ -453,6 +466,14 @@ impl Twin {
             t.land(&e, &signed, arrived);
         }
         t
+    }
+    /// A PERSON ANSWERING THEIR OWN DELETE OF THEMSELVES — the one thing a deleted node writes: a restore or purge of a delete a person
+    /// wrote at themselves, by that person. Nothing deleted answers any other delete, nor a delete of itself by anyone above it
+    pub fn own_undo(&self, e: &Value) -> bool {
+        let by = id_of(&e["by"]);
+        matches!(e["is"].as_str(), Some("restore" | "purge"))
+            && self.parent(&by).is_none()
+            && e["refs"]["re"].as_i64().and_then(|d| self.entries.get(&d)).is_some_and(|d| d["is"] == "delete" && id_of(&d["by"]) == by && id_of(&d["at"]) == by)
     }
     /// WHAT A PURGE ERASES, as the rows that stay of it (`erased_row`) — what the keeper replaces its rows with
     pub fn erases(&self, purge: &Value) -> Vec<Value> {
@@ -888,12 +909,11 @@ impl Twin {
         }
         // BLOCKED OR DELETED, NOTHING IS WRITTEN AS IT — but, by whoever deleted, the delete's own undo or carrying out. Who signs for a
         // node leaves the blocked and deleted out already (`identity::signing_nodes`)
-        let undo = matches!(e["is"].as_str(), Some("restore" | "purge"));
         if self.nodes.contains_key(&by) && self.blocked(&by) {
             return Err(json!({ "g": e["g"], "why": format!("{by} is blocked: it signs nothing from then on") }));
         }
-        if self.nodes.contains_key(&by) && self.deleted(&by) && !undo {
-            return Err(json!({ "g": e["g"], "why": format!("{by} is deleted: it signs nothing but its delete's undo") }));
+        if self.nodes.contains_key(&by) && self.deleted(&by) && !self.own_undo(e) {
+            return Err(json!({ "g": e["g"], "why": format!("{by} is deleted: it signs nothing") }));
         }
         // WHO A NODE IS AND WHAT IT RUNS: every door to them (`decides`) through the one test (`may_decide`)
         if let Some(what) = self.decides(e) {
@@ -925,6 +945,11 @@ impl Twin {
                 Some(Whose::Any) => None,
             };
             if let Some(why) = not {
+                return Err(json!({ "g": e["g"], "why": why }));
+            }
+        }
+        if let Some(p) = e["value"].get("place").filter(|_| matches!(e["is"].as_str(), Some("be" | "make"))) {
+            if let Err(why) = place_whole(p) {
                 return Err(json!({ "g": e["g"], "why": why }));
             }
         }

@@ -149,16 +149,16 @@ pub struct Signed {
     pub present: bool,
 }
 /// THE NODES WHOSE KEYS SIGN FOR A NODE — the one answer to it, for entries and requests alike: itself and every node above it, and
-/// whoever carries any of them now, with every node above them — nearest first; never one blocked, nor one deleted (but, for the undo
-/// or carrying out of a delete, `undo`, a deleted one: whoever deleted itself answers its own delete)
-pub fn signing_nodes(t: &Twin, by: &str, undo: bool) -> Vec<String> {
+/// whoever carries any of them now, with every node above them — nearest first; never one blocked, nor one deleted — but a person who
+/// deleted themselves, answering that very delete (`own_undo`: `Twin::own_undo`), signs for themselves
+pub fn signing_nodes(t: &Twin, by: &str, own_undo: bool) -> Vec<String> {
     let mut nodes = t.chain(by);
     for x in nodes.clone() {
         for c in t.nodes.get(&x).and_then(|n| n.who.get("carried_by")).map(ids_of).unwrap_or_default() {
             nodes.extend(t.chain(&c).into_iter().filter(|y| !nodes.contains(y)).collect::<Vec<_>>());
         }
     }
-    nodes.retain(|x| !t.blocked(x) && (undo || !t.deleted(x)));
+    nodes.retain(|x| !t.blocked(x) && (!t.deleted(x) || (own_undo && x == by)));
     nodes
 }
 /// A NODE'S OWN KEYS, when an act arrived: as decided from above, and a take-over's once it waited — each with its node, and whether
@@ -183,7 +183,7 @@ pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<Signed, String> {
     let keys = match parse_id(&e["refs"]["proof"]).filter(|_| e["is"] == "takeover") {
         Some(p) if t.takeover_granted(&by, &p, arrived) => own_keys(t, &p, arrived),
         Some(p) => return Err(format!("{p} is not a way back {by} granted")),
-        None => signers(t, &by, arrived, matches!(e["is"].as_str(), Some("restore" | "purge"))),
+        None => signers(t, &by, arrived, t.own_undo(e)),
     };
     // A PERSON'S FIRST KEY: nobody is above them and nothing knows them yet — signed with a key it names (whether they may come to be
     // is the twin's, `admit`); unsigned only at the record's very beginning, where nothing can be asked of it yet

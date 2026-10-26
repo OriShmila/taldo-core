@@ -506,8 +506,51 @@ fn a_purge_in_a_long_kept_record_lands_before_its_row_is_kept() {
 
 #[test]
 fn where_a_program_runs_is_set_from_above() {
-    let es = vec![first_key(ORI), make(1, ORI, "N", ORI, "taldo"), act(2, ORI, "N", "be", json!({}), json!({ "host": "h1", "vm": "a" })), act(3, "N", "N", "be", json!({}), json!({ "host": "elsewhere" }))];
+    let place = |host: &str| json!({ "place": { "host": host, "user": "u", "key": "k", "vm": "a", "machine": "x86_64-linux" } });
+    let es = vec![first_key(ORI), make(1, ORI, "N", ORI, "taldo"), act(2, ORI, "N", "be", json!({}), place("h1")), act(3, "N", "N", "be", json!({}), place("elsewhere")), act(4, ORI, "N", "be", json!({}), json!({ "place": { "host": "h2" } })), act(5, ORI, "N", "be", json!({}), json!({ "host": "a detail, as any" }))];
     let t = fold(&es);
     assert!(t.entries.contains_key(&2) && !t.entries.contains_key(&3), "a program's node said where it runs itself: {:?}", t.rejected);
-    assert_eq!(t.nodes["N"].who["host"], "h1");
+    assert!(!t.entries.contains_key(&4), "a place not whole was taken");
+    assert_eq!(t.nodes["N"].who["place"]["host"], "h1");
+    assert_eq!(t.nodes["N"].value["host"], "a detail, as any", "a detail named like part of a place is not an everyday detail any more");
+}
+
+// ─── THE FIFTH REVIEW'S PROBES (26 Oct): a deleted node answers no delete but a person's own of themselves ───
+
+#[test]
+fn nothing_deleted_answers_its_own_delete_but_a_person_of_themselves() {
+    let keep = act(1, ORI, ORI, "be", json!({}), json!({ "keep_deleted": 10 }));
+    // a device that carries Ori, deleted by Ori: its key, as Ori, neither undoes nor carries out that delete
+    let base = vec![first_key(ORI), keep.clone(), make(2, ORI, "D", ORI, "device"), act(3, ORI, ORI, "be", json!({}), json!({ "carried_by": ["D"] })), act(4, ORI, "D", "delete", json!({}), json!({}))];
+    let mut r = base.clone();
+    r.push(signed_by("D", json!({ "g": 5, "ts": 5, "arrived": 5, "by": ORI, "at": "D", "is": "restore", "refs": { "re": 4 }, "value": {} })));
+    let t = fold(&r);
+    assert!(!t.entries.contains_key(&5) && t.deleted("D"), "a deleted device brought itself back");
+    let mut p = base.clone();
+    p.push(signed_by("D", json!({ "g": 5, "ts": 50, "arrived": 50, "by": ORI, "at": "D", "is": "purge", "refs": { "re": 4 }, "value": { "sigs": [] } })));
+    assert!(!fold(&p).entries.contains_key(&5), "a deleted device erased its own trail");
+    // an agent Ori deleted purges nothing of itself
+    let mut a = vec![first_key(ORI), keep, make(2, ORI, "A", ORI, "agent"), act(3, "A", "A", "say", json!({}), json!({ "says": "x" })), act(4, ORI, "A", "delete", json!({}), json!({}))];
+    let t0 = fold(&a);
+    let sigs: Vec<Value> = t0.erasing(4).iter().map(|g| t0.entry(*g)["sig"]["sig"].clone()).collect();
+    a.push(signed(json!({ "g": 5, "ts": 50, "arrived": 50, "by": "A", "at": "A", "is": "purge", "refs": { "re": 4 }, "value": { "sigs": sigs } })));
+    assert!(!fold(&a).entries.contains_key(&5), "a deleted agent purged itself");
+}
+
+#[test]
+fn an_entry_taken_and_not_kept_yet_reads_alike_by_number_and_walked() {
+    use taldo_core::seams::Store;
+    let store = std::sync::Arc::new(taldo_core::fakes::FakeStore::default());
+    store.lease("k").unwrap();
+    let mut t = Twin::stored(store.clone());
+    for e in [first_key(ORI), act(1, ORI, ORI, "be", json!({}), json!({ "n": 1 }))] {
+        let mut e = e;
+        arrives(&mut e);
+        let s = t.admit(&e, e["arrived"].as_i64().unwrap()).unwrap();
+        t.land(&e, &s, e["arrived"].as_i64().unwrap());
+    }
+    assert!(t.entries.get(&1).is_some());
+    assert_eq!(t.entries.iter().map(|(g, _)| g).collect::<Vec<_>>(), vec![0, 1], "walked, what is taken and not kept is missing");
+    assert_eq!(t.entries.iter().rev().map(|(g, _)| g).collect::<Vec<_>>(), vec![1, 0]);
+    assert_eq!(t.entries.having("n"), vec![1], "by a detail, what is taken and not kept is missing");
 }
