@@ -953,10 +953,12 @@ impl Twin {
         after.head = mark_hash(&row["mark"]);
         after.last = g;
         after.land_line(&row, signed.present, arrived);
-        // NOTHING KEPT THAT TALDO COULD NOT MARK AFTER IT: once the record has its Taldo, a line that leaves it none to mark with —
-        // its Taldo deleted or blocked, or a node above it — is never kept: every line after it would never be read
-        if self.record_taldo().is_some() && after.marking_keys().is_empty() {
-            return Err(json!({ "g": e["g"], "why": "after it, the record's Taldo could not mark it: Taldo is never deleted or blocked out from under its record" }));
+        // NOTHING KEPT THAT TALDO COULD NOT MARK AFTER IT: once the record has its Taldo, the key that marks this line still marks the
+        // record after it — never Taldo deleted or blocked (or a node above it), nor its keys given to a key it does not hold: every
+        // line after would never be read. (A record marked once, at its end, is held to its end instead: `made` past this line)
+        let marks_with = row["mark"]["sig"]["key"].as_str().unwrap_or("");
+        if made < g && after.record_taldo().is_some() && !after.marking_keys().iter().any(|k| k == marks_with) {
+            return Err(json!({ "g": e["g"], "why": "after it, the key Taldo marks with would not mark the record: Taldo is never deleted, blocked or given keys it does not hold out from under its record" }));
         }
         *self = after;
         Ok(Taken { row, erased, signed })
