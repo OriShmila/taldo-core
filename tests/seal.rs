@@ -125,6 +125,15 @@ fn sealed_code_never_governs() {
     }
     let t = with(&[sealed.clone(), act(16, ENGINE, "Ori › Taldo › engine › someone", "make", json!({ "in": ENGINE }), json!({ "kind": "person" }))]);
     assert!(!t.entries.contains_key(&16) && why(&t, 16).contains("never makes"), "sealed code made a person");
+    for (g, at, is, refs, value) in [
+        (17, ENGINE, "takeover", json!({}), json!({ "keys": [] })),
+        (18, "Ori › Taldo › engine › helper", "make", json!({ "in": ENGINE }), json!({ "kind": "agent", "keys": [] })),
+        (19, ENGINE, "grant", json!({}), json!({ "to": "Ori", "action": "take over" })),
+        (20, "Ori › Taldo › engine › part", "seal", json!({}), whole('b')),
+    ] {
+        let t = with(&[sealed.clone(), act(g, ENGINE, at, is, refs, value)]);
+        assert!(!t.entries.contains_key(&g) && why(&t, g).contains("runs sealed code"), "sealed code wrote a {is}: {}", why(&t, g));
+    }
     // before it was sealed, the same node set its own keys as any node does
     let t = with(&[act(12, ENGINE, ENGINE, "be", json!({}), json!({ "keys": [] }))]);
     assert!(t.entries.contains_key(&12), "{}", why(&t, 12));
