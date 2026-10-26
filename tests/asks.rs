@@ -11,7 +11,7 @@ fn p(s: &str) -> String {
 }
 fn act(g: i64, by: &str, at: &str, is: &str, refs: Value, value: Value) -> Value {
     common::signed(
-        json!({ "g": g, "ts": g, "by": p(by), "at": p(at), "is": is, "refs": refs, "value": value }),
+        json!({ "g": g, "ts": g, "arrived": g, "by": p(by), "at": p(at), "is": is, "refs": refs, "value": value }),
     )
 }
 fn ask(g: i64, by: &str, about: &str, label: &str, moves: Value) -> Value {
@@ -39,7 +39,7 @@ fn a_decision_is_held_until_its_thing_moves_by_whoever_the_flows_name() {
     let mut log = vec![
         common::first_key("Ori"),
         common::signed(
-            json!({ "g": 99999, "ts": 0, "by": "Ori", "at": "Ori", "is": "be", "refs": {}, "value": { "keys": [{ "key": common::public(&p("Ori")) }, { "key": common::finger_public() }] } }),
+            json!({ "g": 99999, "ts": 0, "arrived": 0, "by": "Ori", "at": "Ori", "is": "be", "refs": {}, "value": { "keys": [{ "key": common::public(&p("Ori")) }, { "key": common::finger_public() }] } }),
         ),
         common::under(901, "Ori › needs"),
         common::under(902, rule),
@@ -58,7 +58,7 @@ fn a_decision_is_held_until_its_thing_moves_by_whoever_the_flows_name() {
         common::under(5, mac),
         // YOUR FLOW, set before anything broke: what breaks under Ori is moved by Claude Code
         common::touched(
-            json!({ "g": 6, "ts": 6, "by": "Ori", "at": "Ori", "is": "be", "refs": {}, "value": json!({ "flow:broken": { "by": p(cc) } }) }),
+            json!({ "g": 6, "ts": 6, "arrived": 6, "by": "Ori", "at": "Ori", "is": "be", "refs": {}, "value": json!({ "flow:broken": { "by": p(cc) } }) }),
         ),
         // the rule broke: Taldo on this Mac asks about it — your flow hands it to Claude Code
         ask(7, mac, rule, "broken", fix.clone()),
@@ -133,7 +133,7 @@ fn a_decision_is_held_until_its_thing_moves_by_whoever_the_flows_name() {
     let tw = fold(&log);
     assert!(!tw.ask_open(15));
     // A LABEL YOU KEEP: money is yours, with your finger, whatever a level below hands off
-    log.push(common::touched(json!({ "g": 17, "ts": 17, "by": "Ori", "at": "Ori", "is": "be", "refs": {}, "value": json!({ "flow:money": { "mine": true, "present": true } }) })));
+    log.push(common::touched(json!({ "g": 17, "ts": 17, "arrived": 17, "by": "Ori", "at": "Ori", "is": "be", "refs": {}, "value": json!({ "flow:money": { "mine": true, "present": true } }) })));
     log.push(act(
         18,
         cc,
@@ -219,7 +219,7 @@ fn a_decision_is_held_until_its_thing_moves_by_whoever_the_flows_name() {
         "stale",
         json!([{ "says": "Fix it", "to": { "fixing": "Ori › Claude Code" } }]),
     ));
-    log.push(common::touched(json!({ "g": 41, "ts": 41, "by": "Ori", "at": "Ori", "is": "be", "refs": {}, "value": json!({ "flow:stale": { "by": p(cc) } }) })));
+    log.push(common::touched(json!({ "g": 41, "ts": 41, "arrived": 41, "by": "Ori", "at": "Ori", "is": "be", "refs": {}, "value": json!({ "flow:stale": { "by": p(cc) } }) })));
     log.push(ask(
         42,
         mac,
@@ -307,7 +307,7 @@ fn a_decision_is_held_until_its_thing_moves_by_whoever_the_flows_name() {
     // NAMING NEVER CREATES: an ask about a node nobody made is refused — and says where to attach; one about a real thing is taken
     let late = |g: i64, by: &str, about: &str| {
         common::signed(
-            json!({ "g": g, "ts": g, "by": p(by), "at": p(by), "is": "ask", "refs": { "about": p(about) }, "value": { "label": "version", "says": "take it?", "moves": [{ "says": "Take it", "act": { "is": "update" } }] } }),
+            json!({ "g": g, "ts": g, "arrived": g, "by": p(by), "at": p(by), "is": "ask", "refs": { "about": p(about) }, "value": { "label": "version", "says": "take it?", "moves": [{ "says": "Take it", "act": { "is": "update" } }] } }),
         )
     };
     log.push(late(60, mac, "Ori › this Mac › Taldo › versions › abc1234"));

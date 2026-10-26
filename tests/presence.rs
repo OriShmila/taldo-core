@@ -11,7 +11,7 @@ fn p(s: &str) -> String {
     s.to_string()
 }
 fn act(g: i64, by: &str, at: &str, is: &str, refs: Value, value: Value) -> Value {
-    json!({ "g": g, "ts": g, "by": p(by), "at": p(at), "is": is, "refs": refs, "value": value })
+    json!({ "g": g, "ts": g, "arrived": g, "by": p(by), "at": p(at), "is": is, "refs": refs, "value": value })
 }
 fn finger() -> SigningKey {
     SigningKey::from_slice(&Sha256::digest(b"the finger")).unwrap()

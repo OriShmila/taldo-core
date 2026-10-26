@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 fn world() -> Vec<Value> {
     vec![
         common::first_key("ori"),
-        common::signed(json!({ "g": 1, "ts": 1, "by": "ori", "at": "ori", "is": "be", "refs": {}, "value": { "keys": [{ "key": common::public("ori") }, { "key": common::finger_public() }] } })),
+        common::signed(json!({ "g": 1, "ts": 1, "arrived": 1, "by": "ori", "at": "ori", "is": "be", "refs": {}, "value": { "keys": [{ "key": common::public("ori") }, { "key": common::finger_public() }] } })),
         make(2, "ori", "org", "ori", "org"),
         // an open kind, as data: OVH's three fields, one of them a secret
         make(3, "org", "ovh", "org", "identity"),
@@ -32,7 +32,7 @@ fn why(t: &Twin, g: i64) -> String {
 #[test]
 fn what_is_blocked_signs_nothing_from_then_on() {
     let base = [
-        common::signed(json!({ "g": 20, "ts": 20, "by": "org", "at": "agent", "is": "make", "refs": { "in": "org" }, "value": { "kind": "agent", "keys": [{ "key": common::public("agent") }] } })),
+        common::signed(json!({ "g": 20, "ts": 20, "arrived": 20, "by": "org", "at": "agent", "is": "make", "refs": { "in": "org" }, "value": { "kind": "agent", "keys": [{ "key": common::public("agent") }] } })),
         act(21, "agent", "agent", "say", json!({}), json!({ "says": "working" })),
         act(22, "ori", "agent", "block", json!({}), json!({})),
         act(23, "agent", "agent", "say", json!({}), json!({ "says": "still here" })),

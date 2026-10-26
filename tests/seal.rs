@@ -8,7 +8,7 @@ fn p(s: &str) -> String {
     s.to_string()
 }
 fn act(g: i64, by: &str, at: &str, is: &str, refs: Value, value: Value) -> Value {
-    common::signed(json!({ "g": g, "ts": g, "by": p(by), "at": p(at), "is": is, "refs": refs, "value": value }))
+    common::signed(json!({ "g": g, "ts": g, "arrived": g, "by": p(by), "at": p(at), "is": is, "refs": refs, "value": value }))
 }
 const ENGINE: &str = "Ori › Taldo › engine";
 /// Ori; Taldo's level, holding its engine (the code sealed) with a part under it, and a sibling beside it

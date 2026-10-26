@@ -63,7 +63,7 @@ fn every_spelling_of_a_signature_is_one() {
 fn a_passkeys_act_is_taken_once_however_spelled() {
     let mut es = vec![first_key("Ori")];
     es.push(act(1, "Ori", "Ori", "be", json!({}), json!({ "keys": [{ "key": public("Ori") }, { "key": finger_public(), "presence": true }] })));
-    let p = touched(json!({ "g": 2, "ts": 2, "by": "Ori", "at": "Ori", "is": "be", "refs": {}, "value": { "name": "Ori" } }));
+    let p = touched(json!({ "g": 2, "ts": 2, "arrived": 2, "by": "Ori", "at": "Ori", "is": "be", "refs": {}, "value": { "name": "Ori" } }));
     es.push(p.clone());
     let sig = p["sig"]["sig"].as_str().unwrap();
     let plain = hex(&Signature::from_der(&unhex(sig)).unwrap().to_bytes());

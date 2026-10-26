@@ -19,6 +19,7 @@ pub fn public(id: &str) -> String {
 }
 /// the entry, signed by its writer's own key
 pub fn signed(mut e: Value) -> Value {
+    arrives(&mut e);
     let by = e["by"].as_str().unwrap().to_string();
     let s: Signature = key_of(&by).sign(signed_bytes(&e).as_bytes());
     e["sig"] = json!({ "key": public(&by), "sig": s.to_bytes().iter().map(|x| format!("{x:02x}")).collect::<String>() });
@@ -26,7 +27,13 @@ pub fn signed(mut e: Value) -> Value {
 }
 /// the root's first key, unsigned: the one entry nobody vouches for
 pub fn first_key(root: &str) -> Value {
-    json!({ "g": 0, "ts": 0, "by": root, "at": root, "is": "be", "refs": {}, "value": { "keys": [{ "key": public(root) }] } })
+    json!({ "g": 0, "ts": 0, "arrived": 0, "by": root, "at": root, "is": "be", "refs": {}, "value": { "keys": [{ "key": public(root) }] } })
+}
+/// A ROW AS KEPT: arrived when its writer wrote it — the test worlds' own choice; a receiver keeps its own time
+pub fn arrives(e: &mut Value) {
+    if e.get("arrived").is_none() {
+        e["arrived"] = e["ts"].clone();
+    }
 }
 /// an act, signed by its writer's own key
 pub fn act(g: i64, by: &str, at: &str, is: &str, refs: Value, value: Value) -> Value {
@@ -39,6 +46,7 @@ pub fn make(g: i64, by: &str, id: &str, parent: &str, kind: &str) -> Value {
 }
 /// the entry, signed by a node above its writer — the level above acting for the level below
 pub fn signed_by(signer: &str, mut e: Value) -> Value {
+    arrives(&mut e);
     let s: Signature = key_of(signer).sign(signed_bytes(&e).as_bytes());
     e["sig"] = json!({ "key": public(signer), "sig": s.to_bytes().iter().map(|x| format!("{x:02x}")).collect::<String>() });
     e
@@ -59,6 +67,7 @@ pub fn finger_public() -> String {
 }
 /// the entry, signed with the finger, present and verified
 pub fn touched(mut e: Value) -> Value {
+    arrives(&mut e);
     use taldo_core::identity::b64url;
     let cd = json!({ "type": "webauthn.get", "challenge": b64url(&Sha256::digest(signed_bytes(&e).as_bytes())) }).to_string();
     let mut ad = Sha256::digest(b"localhost").to_vec();
@@ -78,4 +87,13 @@ pub fn under(g: i64, id: &str) -> Value {
 /// nodes made, each under the one its id names one step up, numbered from `g` — the places a test world acts at
 pub fn tree(g: i64, ids: &[&str]) -> Vec<Value> {
     ids.iter().enumerate().map(|(i, id)| under(g + i as i64, id)).collect()
+}
+
+/// A WAY IN FOR ONE MORE PERSON, given by a node that exists (a link, a sign-up): a `join` grant at itself
+pub fn invite(g: i64, by: &str) -> Value {
+    act(g, by, by, "grant", json!({}), json!({ "action": "join" }))
+}
+/// a person come in by a way in: their own first key, answering it
+pub fn joins(g: i64, person: &str, invite: i64) -> Value {
+    signed(json!({ "g": g, "ts": g, "by": person, "at": person, "is": "be", "refs": { "re": invite }, "value": { "keys": [{ "key": public(person) }] } }))
 }

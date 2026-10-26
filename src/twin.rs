@@ -83,6 +83,9 @@ pub struct Node {
     pub kind: String,
     /// what holds it: none for a person
     pub parent: Option<String>,
+    /// WHO IT IS — the keys it signs with, who carries it, what stays when it is deleted — as decided from above it (`from_above`):
+    /// never one of its details, so nothing that writes details reaches it
+    pub who: Map<String, Value>,
     /// its details as written, the latest of each
     pub value: Map<String, Value>,
     /// its details as accepted
@@ -211,11 +214,34 @@ fn seal_whole(v: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// a node's details, with an entry's laid on them — never who it is (`GOVERNING`), which lands only in `Node::who`
 fn laid(mut d: Map<String, Value>, e: &Value) -> Map<String, Value> {
     for (k, x) in e["value"].as_object().cloned().unwrap_or_default() {
-        d.insert(k, x);
+        if !GOVERNING.contains(&k.as_str()) {
+            d.insert(k, x);
+        }
     }
     d
+}
+/// WHO A NODE IS, with what an entry decided of it from above laid on it
+fn said_who(mut w: Map<String, Value>, e: &Value) -> Map<String, Value> {
+    for (k, x) in e["value"].as_object().cloned().unwrap_or_default() {
+        if GOVERNING.contains(&k.as_str()) {
+            w.insert(k, x);
+        }
+    }
+    w
+}
+/// WHAT AN ENTRY DECIDES OF A NODE FROM ABOVE: the code it runs (a seal), or who it is (a make or a `be` saying its keys, who carries
+/// it, what stays when it is deleted) — the one test of it, so no kind of entry reaches either another way
+fn decides(e: &Value) -> Option<&'static str> {
+    if e["is"] == "seal" {
+        return Some("code");
+    }
+    if e["is"] != "be" && e["is"] != "make" {
+        return None;
+    }
+    GOVERNING.iter().find(|k| e["value"].get(**k).is_some()).copied()
 }
 
 impl Twin {
@@ -277,7 +303,7 @@ impl Twin {
     }
     /// HOW LONG A DELETION WAITS before it is erased: the nearest `keep_deleted` from the node up
     fn keep_for(&self, id: &str) -> Option<i64> {
-        self.chain(id).iter().find_map(|x| self.nodes.get(x)?.value.get("keep_deleted")?.as_i64())
+        self.chain(id).iter().find_map(|x| self.nodes.get(x)?.who.get("keep_deleted")?.as_i64())
     }
     /// A NODE AND EVERYTHING UNDER IT
     fn subtree(&self, id: &str) -> Vec<String> {
@@ -307,6 +333,15 @@ impl Twin {
             return None;
         }
         self.at_kind(node, "seal").next_back().map(|(g, _)| g)
+    }
+    /// A WAY IN, OPEN: the `join` grant this first key answers (`refs.re`) — in force, not run out at `arrived`, and not used by
+    /// anyone yet
+    fn way_in(&self, e: &Value, arrived: i64) -> bool {
+        let Some(g) = e["refs"]["re"].as_i64() else { return false };
+        let Some(j) = self.entries.get(&g).filter(|j| j["is"] == "grant" && j["value"]["action"] == "join") else { return false };
+        let in_time = j["value"]["until"].as_i64().is_none_or(|u| arrived <= u);
+        let used = self.answers.get(&g).into_iter().flatten().any(|x| self.is(*x) == "be");
+        in_time && !self.revoked(g) && !used
     }
     /// SET FROM ABOVE: `by` is a node above `at` — or `at` itself when nothing is above it (a person says who they are)
     fn from_above(&self, at: &str, by: &str) -> bool {
@@ -339,7 +374,7 @@ impl Twin {
     }
     /// WHO CARRIES A RESPONSIBILITY NOW: its detail `carried_by`
     pub fn carriers(&self, id: &str) -> Vec<String> {
-        self.nodes.get(id).and_then(|n| n.value.get("carried_by")).map(ids_of).unwrap_or_default()
+        self.nodes.get(id).and_then(|n| n.who.get("carried_by")).map(ids_of).unwrap_or_default()
     }
     /// ENTRY `g`, which is taken (read from its row when the twin keeps rows)
     fn e(&self, g: i64) -> Arc<Value> {
@@ -502,10 +537,17 @@ impl Twin {
         self.within(maker, &id_of(&self.e(a)["at"]))
     }
 
-    /// ONE ENTRY LANDS: at its node, by its node, naming what it names — returns what it touched. Folded from a list, an entry
-    /// arrives when its writer says it was written (`ts`)
+    /// ONE ENTRY LANDS, as its row was kept: at its node, by its node, naming what it names, arrived when its row says (`arrived`) —
+    /// returns what it touched
     pub fn apply(&mut self, e: &Value) -> BTreeSet<String> {
-        self.apply_arrived(e, e["ts"].as_i64().unwrap_or(0))
+        // WHEN IT ARRIVED is the receiver's, kept with its row (`arrived`) — never the time its writer wrote in it
+        match e["arrived"].as_i64() {
+            Some(arrived) => self.apply_arrived(e, arrived),
+            None => {
+                self.rejected.push_back(json!({ "g": e["g"], "why": "its row says no time it arrived" }));
+                BTreeSet::new()
+            }
+        }
     }
     /// ONE ENTRY LANDS, arrived at `arrived` (ms, the receiver's clock): taken, or kept among the rejected with why
     pub fn apply_arrived(&mut self, e: &Value, arrived: i64) -> BTreeSet<String> {
@@ -573,7 +615,9 @@ impl Twin {
         // NAMING NEVER CREATES: every node an entry names was made before — by a `make` under its parent. A person comes to be by its
         // first key (`identity`)
         let (by, at) = (id_of(&e["by"]), id_of(&e["at"]));
-        let root = !self.nodes.contains_key(&by) && by == at && e["is"] == "be";
+        // A PERSON COMES TO BE BY THEIR OWN FIRST KEY only at the record's beginning, or through a way in a node that exists gave (a
+        // `join` grant: a link, a sign-up) — once; nothing else exists by claiming itself
+        let root = !self.nodes.contains_key(&by) && by == at && e["is"] == "be" && (self.nodes.is_empty() || self.way_in(e, arrived));
         if !root && !self.nodes.contains_key(&by) {
             return Err(json!({ "g": e["g"], "why": format!("{by} was never made") }));
         }
@@ -656,13 +700,34 @@ impl Twin {
         if (e["is"] == "takeover" || (e["is"] == "grant" && e["value"]["action"] == "take over")) && self.parent(&at).is_some() {
             return Err(json!({ "g": e["g"], "why": format!("{at} is not a person: who it is is set from above it, never taken over") }));
         }
-        // WHAT A NODE RUNS AND WHO IT IS ARE SET FROM ABOVE: a seal (the code it runs, by hash) and its keys, who carries it and what
-        // stays when it is deleted — written only by a node above it, never by the node itself, what is under it or beside it, and
-        // under no grant; a person, with nothing above them, says who they are themselves. So nothing ever changes what it is or runs
-        let sets = (e["is"] == "seal").then(|| "code").or_else(|| (e["is"] == "be").then(|| GOVERNING.iter().find(|k| e["value"].get(**k).is_some()).copied()).flatten());
-        if let Some(what) = sets {
-            if !self.from_above(&at, &by) {
+        // WHAT A NODE RUNS AND WHO IT IS ARE DECIDED FROM ABOVE IT (`decides`, the one test): by a node above it — for a node being
+        // made, its maker, at or above where it is made, never a maker beside under a grant — never by itself, what is under it or
+        // beside it; a person, with nothing above them, says who they are themselves
+        if let Some(what) = decides(e) {
+            let above = if e["is"] == "make" { self.within(&id_of(&e["refs"]["in"]), &by) } else { root || self.from_above(&at, &by) };
+            if !above {
                 return Err(json!({ "g": e["g"], "why": format!("the {what} of {at} is set only from above it — never by itself, and never under a grant") }));
+            }
+        }
+        // WHAT IT NAMES EXISTS: a grant's holder, who carries a node — nothing is given to a node that was never made
+        let named_in_value: Vec<String> = parse_id(&e["value"]["to"]).filter(|_| e["is"] == "grant").into_iter().chain(e["value"].get("carried_by").map(ids_of).unwrap_or_default()).collect();
+        if let Some(x) = named_in_value.iter().find(|x| !self.nodes.contains_key(*x)) {
+            return Err(json!({ "g": e["g"], "why": format!("{x} was never made") }));
+        }
+        // AN ANSWER ANSWERS WHAT IT NAMES IN `re`: an entry before it, of the kind it answers
+        if let Some(re) = e["refs"]["re"].as_i64() {
+            let answered = (re < e["g"].as_i64().unwrap_or(i64::MAX)).then(|| self.entries.get(&re)).flatten().map(|x| x["is"].as_str().unwrap_or("").to_string());
+            let Some(kind) = answered else {
+                return Err(json!({ "g": e["g"], "why": format!("it answers #{re}, which is no entry before it") }));
+            };
+            let of: &[&str] = match e["is"].as_str().unwrap_or("") {
+                "restore" | "purge" => &["delete"],
+                "revoke" => &["grant"],
+                "decline" => &["ask", "takeover"],
+                _ => &[],
+            };
+            if !of.is_empty() && !of.contains(&kind.as_str()) {
+                return Err(json!({ "g": e["g"], "why": format!("a {} answers a {}, and #{re} is a {kind}", e["is"], of.join(" or ")) }));
             }
         }
         if e["is"] == "seal" {
@@ -802,7 +867,7 @@ impl Twin {
                 self.nodes.get_mut(&k).unwrap().named.push_back(g);
             }
         }
-        for x in numbers(e) {
+        if let Some(x) = e["refs"]["re"].as_i64() {
             self.answers.entry(x).or_default().push_back(g);
             if let Some(a) = self.entries.get(&x).and_then(|y| parse_id(&y["at"])) {
                 touched.insert(a);
@@ -811,6 +876,7 @@ impl Twin {
         match e["is"].as_str().unwrap_or("") {
             "be" | "make" => {
                 let n = self.nodes.get_mut(&at).unwrap();
+                n.who = said_who(std::mem::take(&mut n.who), e);
                 n.value = laid(std::mem::take(&mut n.value), e);
                 // 3. work comes last in its node's history: it is read on top of what is in there now
                 self.history.entry(at.clone()).or_default().push_back(g);
@@ -1355,11 +1421,9 @@ impl Twin {
 
     /// 8. REACH: whether what is owed to `who` has reached it — an entry by it, or below it, points to it
     pub fn reached(&self, who: &str, what: i64) -> bool {
-        self.answers
-            .get(&what)
-            .into_iter()
-            .flatten()
-            .any(|x| self.within(&id_of(&self.e(*x)["by"]), who))
+        // A HOLD IS REACHED when what it asked is answered (`re`) from its address or below; anything else, when it is answered so
+        let asked = if self.is(what) == "acceptance" { self.asked(what) } else { vec![what] };
+        asked.iter().any(|g| self.answers.get(g).into_iter().flatten().any(|x| self.within(&id_of(&self.e(*x)["by"]), who)))
     }
     /// what holds a node, as an address: its parent, or "" for a person
     fn holder(&self, node: &str) -> String {

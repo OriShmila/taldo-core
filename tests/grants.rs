@@ -7,7 +7,7 @@ fn p(s: &str) -> String {
     s.to_string()
 }
 fn act(g: i64, by: &str, at: &str, is: &str, refs: Value, value: Value) -> Value {
-    common::signed(json!({ "g": g, "ts": g, "by": p(by), "at": p(at), "is": is, "refs": refs, "value": value }))
+    common::signed(json!({ "g": g, "ts": g, "arrived": g, "by": p(by), "at": p(at), "is": is, "refs": refs, "value": value }))
 }
 /// Ori, two agents with their keys, a contract in Ori's files, and Anthropic as a service Ori holds
 fn world() -> Vec<Value> {

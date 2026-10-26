@@ -220,9 +220,9 @@ pub fn keys(k: &dyn Keys, name: &str) -> Result<(), String> {
         return Err("asking for a key again gave another key".into());
     }
     // a world where the root holds this key: an act signed with it is taken; one by a node it does not sign for is not
-    let mut act = serde_json::json!({ "g": 1, "ts": 1, "by": "Root", "at": "Root", "is": "say", "refs": {}, "value": { "says": "signed" } });
+    let mut act = serde_json::json!({ "g": 1, "ts": 1, "arrived": 1, "by": "Root", "at": "Root", "is": "say", "refs": {}, "value": { "says": "signed" } });
     act["sig"] = ok(k.sign(name, signed_bytes(&act).as_bytes(), "a conformance test"), "sign")?;
-    let first = serde_json::json!({ "g": 0, "ts": 0, "by": "Root", "at": "Root", "is": "be", "refs": {}, "value": { "keys": [{ "key": public }] } });
+    let first = serde_json::json!({ "g": 0, "ts": 0, "arrived": 0, "by": "Root", "at": "Root", "is": "be", "refs": {}, "value": { "keys": [{ "key": public }] } });
     let t = crate::twin::fold(&[first, act.clone()]);
     if !t.entries.contains_key(&1) {
         return Err(format!("what the key signed was not taken as signed by its node: {:?}", t.rejected));

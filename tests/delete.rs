@@ -13,7 +13,7 @@ const KEEP: i64 = 1_000;
 fn world() -> Vec<Value> {
     vec![
         common::first_key("taxowner"),
-        common::signed(json!({ "g": 1, "ts": 1, "by": "taxowner", "at": "taxowner", "is": "be", "refs": {}, "value": { "keys": [{ "key": common::public("taxowner") }, { "key": common::finger_public() }] } })),
+        common::signed(json!({ "g": 1, "ts": 1, "arrived": 1, "by": "taxowner", "at": "taxowner", "is": "be", "refs": {}, "value": { "keys": [{ "key": common::public("taxowner") }, { "key": common::finger_public() }] } })),
         make(2, "taxowner", "taxorg", "taxowner", "org"),
         make(3, "taxorg", "dana", "taxorg", "outside"),
         make(4, "taxorg", "case", "dana", "thing"),
@@ -39,7 +39,7 @@ fn keep(g: i64) -> Value {
     act(g, "taxowner", "taxorg", "be", json!({}), json!({ "keep_deleted": KEEP }))
 }
 fn delete(g: i64, ts: i64, at: &str) -> Value {
-    common::touched(json!({ "g": g, "ts": ts, "by": "taxowner", "at": at, "is": "delete", "refs": {}, "value": {} }))
+    common::touched(json!({ "g": g, "ts": ts, "arrived": ts, "by": "taxowner", "at": at, "is": "delete", "refs": {}, "value": {} }))
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn a_deleted_node_is_hidden_at_once_and_comes_back_when_undone() {
     assert!(!t.ask_open(21), "a stage about a deleted node is still asked");
     // undone, with a person there: back, whole
     log.pop();
-    log.push(common::touched(json!({ "g": 23, "ts": 23, "by": "taxowner", "at": "dana", "is": "restore", "refs": { "re": 22 }, "value": {} })));
+    log.push(common::touched(json!({ "g": 23, "ts": 23, "arrived": 23, "by": "taxowner", "at": "dana", "is": "restore", "refs": { "re": 22 }, "value": {} })));
     log.push(act(24, "taxorg", "form", "be", json!({}), json!({ "x": 1 })));
     let t = with(&log);
     assert!(!t.deleted("form") && taken(&t, 24), "{}", why(&t, 24));
@@ -78,7 +78,7 @@ fn a_purge_erases_what_it_held_after_the_waiting_and_keeps_the_skeleton() {
     let erased = t.erasing(20);
     assert_eq!(erased, vec![6, 7], "what the purge erases: every entry at Dana and under her but the makes and the delete");
     let sigs: Vec<Value> = erased.iter().map(|g| t.entry(*g)["sig"]["sig"].clone()).collect();
-    let purge = |g: i64, ts: i64| common::signed(json!({ "g": g, "ts": ts, "by": "taxorg", "at": "dana", "is": "purge", "refs": { "re": 20 }, "value": { "sigs": sigs } }));
+    let purge = |g: i64, ts: i64| common::signed(json!({ "g": g, "ts": ts, "arrived": ts, "by": "taxorg", "at": "dana", "is": "purge", "refs": { "re": 20 }, "value": { "sigs": sigs } }));
     // before the waiting is over: refused
     let t = with(&[keep(19), delete(20, 20, "dana"), purge(21, 20 + KEEP - 1)]);
     assert!(!taken(&t, 21), "a purge was taken before the waiting was over");
@@ -99,7 +99,7 @@ fn a_purge_erases_what_it_held_after_the_waiting_and_keeps_the_skeleton() {
     let t = fold(&replay);
     assert!(!taken(&t, 6), "an erased act was taken again");
     // undone before the purge: no purge
-    let undone = common::touched(json!({ "g": 21, "ts": 21, "by": "taxowner", "at": "dana", "is": "restore", "refs": { "re": 20 }, "value": {} }));
+    let undone = common::touched(json!({ "g": 21, "ts": 21, "arrived": 21, "by": "taxowner", "at": "dana", "is": "restore", "refs": { "re": 20 }, "value": {} }));
     let t = with(&[keep(19), delete(20, 20, "dana"), undone, purge(22, 20 + KEEP)]);
     assert!(!taken(&t, 22), "a purge erased what was brought back");
 }
@@ -111,7 +111,7 @@ fn only_who_deleted_undoes_it() {
     let t = with(&[keep(19), delete(20, 20, "case"), below]);
     assert!(!taken(&t, 21) && why(&t, 21).contains("only it, or a node above it"), "what was under the deleter undid its delete: {}", why(&t, 21));
     assert!(t.deleted("case"), "the case came back by a restore from under who deleted it");
-    let own = common::touched(json!({ "g": 21, "ts": 21, "by": "taxowner", "at": "case", "is": "restore", "refs": { "re": 20 }, "value": {} }));
+    let own = common::touched(json!({ "g": 21, "ts": 21, "arrived": 21, "by": "taxowner", "at": "case", "is": "restore", "refs": { "re": 20 }, "value": {} }));
     let t = with(&[keep(19), delete(20, 20, "case"), own]);
     assert!(taken(&t, 21) && !t.deleted("case"), "who deleted it could not bring it back: {}", why(&t, 21));
 }

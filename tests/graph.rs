@@ -13,9 +13,13 @@ use serde_json::{json, Value};
 fn world() -> Vec<Value> {
     vec![
         common::first_key("ori"),
-        common::first_key("taxowner"),
-        common::first_key("tax2"),
-        common::first_key("tax3"),
+        // each other person came in by a way in you gave: a link, a sign-up
+        common::invite(901, "ori"),
+        common::joins(902, "taxowner", 901),
+        common::invite(903, "ori"),
+        common::joins(904, "tax2", 903),
+        common::invite(905, "ori"),
+        common::joins(906, "tax3", 905),
         make(1, "ori", "taldoorg", "ori", "org"),
         make(2, "taldoorg", "agent", "taldoorg", "agent"),
         make(3, "taldoorg", "servers", "taldoorg", "machine"),
@@ -26,8 +30,8 @@ fn world() -> Vec<Value> {
         make(8, "taxorg", "resp1", "taxorg", "responsibility"),
         make(9, "taxorg", "taxtaldo", "taxorg", "sandbox"),
         // a device is let in with a finger: the owner's
-        common::signed(json!({ "g": 13, "ts": 13, "by": "taxowner", "at": "taxowner", "is": "be", "refs": {}, "value": { "keys": [{ "key": common::public("taxowner") }, { "key": common::finger_public() }] } })),
-        common::touched(json!({ "g": 14, "ts": 14, "by": "taxowner", "at": "laptop", "is": "make", "refs": { "in": "taxorg" }, "value": { "kind": "device", "keys": [{ "key": common::public("laptop") }] } })),
+        common::signed(json!({ "g": 13, "ts": 13, "arrived": 13, "by": "taxowner", "at": "taxowner", "is": "be", "refs": {}, "value": { "keys": [{ "key": common::public("taxowner") }, { "key": common::finger_public() }] } })),
+        common::touched(json!({ "g": 14, "ts": 14, "arrived": 14, "by": "taxowner", "at": "laptop", "is": "make", "refs": { "in": "taxorg" }, "value": { "kind": "device", "keys": [{ "key": common::public("laptop") }] } })),
         act(11, "taxorg", "form", "be", json!({}), json!({ "name": "Form 106" })),
         act(12, "taxorg", "dana", "be", json!({}), json!({ "name": "Dana" })),
     ]
@@ -110,8 +114,9 @@ fn your_key_opens_their_org_node_and_nothing_below() {
 
 #[test]
 fn a_setup_grant_reaches_below_their_org_only_while_it_lasts() {
+    // made under a grant, a node is given no keys by its maker: who it is comes from above it
     let setup = act(20, "taxowner", "taxorg", "grant", json!({}), json!({ "to": "agent", "action": "make", "below": true }));
-    let t = with(&[setup.clone(), make(21, "agent", "resp2", "taxorg", "responsibility")]);
+    let t = with(&[setup.clone(), act(21, "agent", "resp2", "make", json!({ "in": "taxorg" }), json!({ "kind": "responsibility" }))]);
     assert!(taken(&t, 21), "the setup grant did not let the agent set up: {}", why(&t, 21));
     assert_eq!(t.owner("resp2").as_deref(), Some("taxowner"), "what the agent made is theirs, not Taldo's");
     // a grant names its act: setting up is not reading
@@ -121,7 +126,7 @@ fn a_setup_grant_reaches_below_their_org_only_while_it_lasts() {
     let t = with(&[
         setup,
         act(21, "taxowner", "taxorg", "revoke", json!({ "re": 20 }), json!({})),
-        make(22, "agent", "resp3", "taxorg", "responsibility"),
+        act(22, "agent", "resp3", "make", json!({ "in": "taxorg" }), json!({ "kind": "responsibility" })),
     ]);
     assert!(!taken(&t, 22), "the agent kept setting up after setup ended");
 }
@@ -147,9 +152,9 @@ fn a_stage_held_by_a_responsibility_goes_to_whoever_carries_it_now() {
     let finger = |e: Value| common::touched(e);
     let mut log = vec![
         // the owner's finger signs for the owner
-        common::signed(json!({ "g": 19, "ts": 19, "by": "taxowner", "at": "taxowner", "is": "be", "refs": {}, "value": { "keys": [{ "key": common::public("taxowner") }, { "key": common::finger_public() }] } })),
+        common::signed(json!({ "g": 19, "ts": 19, "arrived": 19, "by": "taxowner", "at": "taxowner", "is": "be", "refs": {}, "value": { "keys": [{ "key": common::public("taxowner") }, { "key": common::finger_public() }] } })),
         // intake under their org is the client manager's, and Person 2 carries it
-        finger(json!({ "g": 20, "ts": 20, "by": "taxowner", "at": "taxorg", "is": "be", "refs": {}, "value": { "flow:intake": { "by": "resp1" } } })),
+        finger(json!({ "g": 20, "ts": 20, "arrived": 20, "by": "taxowner", "at": "taxorg", "is": "be", "refs": {}, "value": { "flow:intake": { "by": "resp1" } } })),
         act(21, "taxowner", "resp1", "be", json!({}), json!({ "carried_by": ["tax2"] })),
         act(22, "taxorg", "taxorg", "ask", json!({ "about": "case" }), json!({ "label": "intake", "says": "intake?", "moves": [{ "says": "Done", "act": { "is": "intake" } }] })),
     ];
@@ -165,10 +170,10 @@ fn a_stage_held_by_a_responsibility_goes_to_whoever_carries_it_now() {
     assert_eq!(t.asks_for("tax3"), vec![(22, false)]);
     // only who carries it now moves it
     let mut by_rp2 = log.clone();
-    by_rp2.push(common::signed_by("tax2", json!({ "g": 24, "ts": 24, "by": "resp1", "at": "resp1", "is": "intake", "refs": { "re": 22 }, "value": {} })));
+    by_rp2.push(common::signed_by("tax2", json!({ "g": 24, "ts": 24, "arrived": 24, "by": "resp1", "at": "resp1", "is": "intake", "refs": { "re": 22 }, "value": {} })));
     let t = with(&by_rp2);
     assert!(t.ask_open(22), "who no longer carries it moved it");
-    log.push(common::signed_by("tax3", json!({ "g": 24, "ts": 24, "by": "resp1", "at": "resp1", "is": "intake", "refs": { "re": 22 }, "value": {} })));
+    log.push(common::signed_by("tax3", json!({ "g": 24, "ts": 24, "arrived": 24, "by": "resp1", "at": "resp1", "is": "intake", "refs": { "re": 22 }, "value": {} })));
     let t = with(&log);
     assert_eq!(t.moved(22), Some(24), "who carries it could not move it: {:?}", t.rejected);
 }

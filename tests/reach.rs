@@ -8,7 +8,7 @@ fn p(s: &str) -> String {
 }
 fn act(g: i64, by: &str, at: &str, is: &str, refs: Value, value: Value) -> Value {
     common::signed(
-        json!({ "g": g, "ts": g, "by": p(by), "at": p(at), "is": is, "refs": refs, "value": value }),
+        json!({ "g": g, "ts": g, "arrived": g, "by": p(by), "at": p(at), "is": is, "refs": refs, "value": value }),
     )
 }
 #[test]
@@ -45,13 +45,14 @@ fn what_is_owed_has_an_address_and_reaching_it_is_recorded() {
         !t.reached("Ori › Taldo", 3),
         "it reached Taldo before anything there answered"
     );
-    // the agent, under Taldo, answers what Ori said: it has reached Taldo's branch, and the hold holds
+    // the agent, under Taldo, answers what Ori said (its `re`, the one field an answer counts through): the hold it was asked by is
+    // reached at Taldo's branch, and holds
     log.push(act(
         5,
         "Ori › Taldo › agent",
         "Ori › Taldo › agent",
         "say",
-        json!({ "re": 4, "for": 3 }),
+        json!({ "re": 4 }),
         json!({ "says": "hi" }),
     ));
     let t = fold(&log);

@@ -13,7 +13,7 @@ fn p(s: &str) -> String {
     s.to_string()
 }
 fn act(g: i64, by: &str, at: &str, is: &str, refs: Value, value: Value) -> Value {
-    common::signed(json!({ "g": g, "ts": g, "by": p(by), "at": p(at), "is": is, "refs": refs, "value": value }))
+    common::signed(json!({ "g": g, "ts": g, "arrived": g, "by": p(by), "at": p(at), "is": is, "refs": refs, "value": value }))
 }
 
 /// rows kept in memory, as a store keeps them: each by number, read back as text
@@ -84,7 +84,7 @@ fn record() -> Vec<Value> {
     let go = json!([{ "says": "Go", "to": { "state": "doing" } }]);
     let mut log = vec![
         common::first_key("Ori"),
-        common::signed(json!({ "g": 1, "ts": 1, "by": "Ori", "at": "Ori", "is": "be", "refs": {}, "value": { "keys": [{ "key": common::public(&p("Ori")) }, { "key": common::finger_public() }] } })),
+        common::signed(json!({ "g": 1, "ts": 1, "arrived": 1, "by": "Ori", "at": "Ori", "is": "be", "refs": {}, "value": { "keys": [{ "key": common::public(&p("Ori")) }, { "key": common::finger_public() }] } })),
         common::under(2, cc),
         common::under(130, "Ori › catalog"),
         common::under(131, card),
@@ -95,7 +95,7 @@ fn record() -> Vec<Value> {
         common::under(5, "Ori › this Mac"),
         common::under(6, mac),
         act(7, "Ori", card, "be", json!({}), json!({ "says": "Sign", "state": "later" })),
-        common::touched(json!({ "g": 8, "ts": 8, "by": "Ori", "at": "Ori", "is": "be", "refs": {}, "value": { "flow:broken": { "by": p(cc) } } })),
+        common::touched(json!({ "g": 8, "ts": 8, "arrived": 8, "by": "Ori", "at": "Ori", "is": "be", "refs": {}, "value": { "flow:broken": { "by": p(cc) } } })),
         act(9, mac, mac, "ask", json!({ "about": p("Ori › needs › x") }), json!({ "label": "broken", "says": "broken?", "moves": fix })),
         act(10, mac, mac, "ask", json!({ "about": p("Ori › needs › x") }), json!({ "label": "broken", "says": "broken again?", "moves": fix })),
         act(11, s, s, "ask", json!({ "about": p(card) }), json!({ "label": "work", "says": "may I?", "moves": go })),
@@ -197,7 +197,7 @@ fn an_act_refused_leaves_no_trace() {
     let mut t = fold(&log);
     let at = 10;
     // naming a node never made: refused, and nothing of it stays — its signature neither
-    let mut e = common::signed(json!({ "g": 1, "ts": at, "by": "Ori", "at": "Ori", "is": "say", "refs": { "about": "Ori › b" }, "value": {} }));
+    let mut e = common::signed(json!({ "g": 1, "ts": at, "arrived": at, "by": "Ori", "at": "Ori", "is": "say", "refs": { "about": "Ori › b" }, "value": {} }));
     let before = format!("{:?}", said(&t));
     assert!(t.admit(&e, at).is_err());
     assert_eq!(format!("{:?}", said(&t)), before, "a refused act changed the twin");
@@ -209,7 +209,7 @@ fn an_act_refused_leaves_no_trace() {
     t.apply_arrived(&e, at);
     assert!(t.entries.contains_key(&3), "{:?}", t.rejected);
     // a writer's clock skips nothing: an act naming a node never made is refused, whenever it says it was written
-    let old = common::signed(json!({ "g": 4, "ts": 5, "by": "Ori", "at": "Ori", "is": "say", "refs": { "about": "Ori › c" }, "value": {} }));
+    let old = common::signed(json!({ "g": 4, "ts": 5, "arrived": 5, "by": "Ori", "at": "Ori", "is": "say", "refs": { "about": "Ori › c" }, "value": {} }));
     assert!(t.admit(&old, at).is_err());
     assert!(t.admit(&old, 0).is_err());
 }

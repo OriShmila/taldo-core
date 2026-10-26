@@ -10,7 +10,7 @@ fn p(s: &str) -> String {
     s.to_string()
 }
 fn act(g: i64, by: &str, at: &str, is: &str, value: Value) -> Value {
-    json!({ "g": g, "ts": g, "by": p(by), "at": p(at), "is": is, "refs": {}, "value": value })
+    json!({ "g": g, "ts": g, "arrived": g, "by": p(by), "at": p(at), "is": is, "refs": {}, "value": value })
 }
 fn by_key(k: &SigningKey, mut e: Value) -> Value {
     let s: Signature = k.sign(signed_bytes(&e).as_bytes());
@@ -102,7 +102,7 @@ fn an_act_is_taken_only_signed_by_its_node_or_a_node_above_it() {
 #[test]
 fn the_root_has_one_first_key_and_a_signed_act_is_taken_once() {
     let mut w = world();
-    let second_first = json!({ "g": 2, "ts": 2, "by": "Ori", "at": "Ori", "is": "be", "refs": {}, "value": { "keys": [{ "key": "02".to_string() + &"11".repeat(32) }] } });
+    let second_first = json!({ "g": 2, "ts": 2, "arrived": 2, "by": "Ori", "at": "Ori", "is": "be", "refs": {}, "value": { "keys": [{ "key": "02".to_string() + &"11".repeat(32) }] } });
     assert!(
         !takes(&w, second_first),
         "a second unsigned first key was taken"

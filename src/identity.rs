@@ -146,14 +146,14 @@ const VERIFIED_AT_MOST: usize = 4_096;
 pub fn keys_for(t: &Twin, by: &str, arrived: i64) -> Vec<(String, bool)> {
     let mut nodes = t.chain(by);
     for x in nodes.clone() {
-        for c in t.nodes.get(&x).and_then(|n| n.value.get("carried_by")).map(ids_of).unwrap_or_default() {
+        for c in t.nodes.get(&x).and_then(|n| n.who.get("carried_by")).map(ids_of).unwrap_or_default() {
             nodes.extend(t.chain(&c).into_iter().filter(|y| !nodes.contains(y)).collect::<Vec<_>>());
         }
     }
     nodes
         .iter()
         .flat_map(|x| {
-            let mut ks = t.nodes.get(x).and_then(|n| n.value.get("keys")).and_then(Value::as_array).cloned().unwrap_or_default();
+            let mut ks = t.nodes.get(x).and_then(|n| n.who.get("keys")).and_then(Value::as_array).cloned().unwrap_or_default();
             ks.extend(t.taken_over(x, arrived));
             ks
         })
@@ -169,8 +169,8 @@ pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<bool, String> {
         Some(p) => return Err(format!("{p} is not a way back {by} granted")),
         None => keys_for(t, &by, arrived),
     };
-    // a person's first key: nobody is above it
-    let first = t.parent(&by).is_none()
+    // A PERSON'S FIRST KEY: nobody is above them and nothing knows them yet — whether they may come to be is the twin's (`admit`)
+    let first = !t.nodes.contains_key(&by)
         && parse_id(&e["at"]).as_deref() == Some(by.as_str())
         && e["is"] == "be"
         && e["value"]["keys"].is_array()

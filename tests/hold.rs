@@ -57,7 +57,7 @@ fn path(v: &Value) -> Vec<String> {
 /// an entry, signed by its writer
 fn entry(g: i64, by: &[String], at: &[String], is: &str, refs: Value, value: Value) -> Value {
     common::signed(
-        json!({ "g": g, "ts": g, "by": k(by), "at": k(at), "is": is, "refs": ids(refs), "value": ids(value) }),
+        json!({ "g": g, "ts": g, "arrived": g, "by": k(by), "at": k(at), "is": is, "refs": ids(refs), "value": ids(value) }),
     )
 }
 /// a node made by the one above it, given its key

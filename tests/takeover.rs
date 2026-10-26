@@ -13,8 +13,11 @@ const T0: i64 = 1_000;
 fn world() -> Vec<Value> {
     vec![
         common::first_key("noa"),
-        common::first_key("sister"),
-        common::first_key("stranger"),
+        // the others came in by ways in Noa gave
+        common::invite(901, "noa"),
+        common::joins(902, "sister", 901),
+        common::invite(903, "noa"),
+        common::joins(904, "stranger", 903),
         make(1, "noa", "org", "noa", "org"),
         make(2, "org", "agent", "org", "agent"),
     ]
@@ -35,11 +38,11 @@ fn grant(g: i64, to: &str) -> Value {
 }
 /// the key a new device brings, taken over for Noa by `proof`, signed by it
 fn takeover(g: i64, ts: i64, proof: &str) -> Value {
-    common::signed_by(proof, json!({ "g": g, "ts": ts, "by": "noa", "at": "noa", "is": "takeover", "refs": { "proof": proof }, "value": { "keys": [{ "key": common::public("noa's new phone") }] } }))
+    common::signed_by(proof, json!({ "g": g, "ts": ts, "arrived": ts, "by": "noa", "at": "noa", "is": "takeover", "refs": { "proof": proof }, "value": { "keys": [{ "key": common::public("noa's new phone") }] } }))
 }
 /// an act of Noa's signed with the new phone's key
 fn as_new_phone(g: i64, ts: i64) -> Value {
-    common::signed_by("noa's new phone", json!({ "g": g, "ts": ts, "by": "noa", "at": "noa", "is": "say", "refs": {}, "value": { "says": "I'm back" } }))
+    common::signed_by("noa's new phone", json!({ "g": g, "ts": ts, "arrived": ts, "by": "noa", "at": "noa", "is": "say", "refs": {}, "value": { "says": "I'm back" } }))
 }
 
 #[test]
@@ -97,7 +100,7 @@ fn only_a_granted_way_takes_over_and_only_keys() {
     assert!(!taken(&t, 20), "someone she never granted took over");
     let t = with(&[takeover(20, T0, "sister")]);
     assert!(!taken(&t, 20), "a take-over with no grant was taken");
-    let more = common::signed_by("sister", json!({ "g": 20, "ts": T0, "by": "noa", "at": "noa", "is": "takeover", "refs": { "proof": "sister" }, "value": { "keys": [{ "key": common::public("x") }], "name": "not Noa" } }));
+    let more = common::signed_by("sister", json!({ "g": 20, "ts": T0, "arrived": T0, "by": "noa", "at": "noa", "is": "takeover", "refs": { "proof": "sister" }, "value": { "keys": [{ "key": common::public("x") }], "name": "not Noa" } }));
     let t = with(&[grant(10, "sister"), more]);
     assert!(!taken(&t, 20), "a take-over carried more than keys");
 }
@@ -105,7 +108,7 @@ fn only_a_granted_way_takes_over_and_only_keys() {
 #[test]
 fn a_recovery_code_is_a_way_back_too() {
     // the code's node under her, holding the code's key — Taldo's own kind, never described as data
-    let code = common::signed(json!({ "g": 10, "ts": 10, "by": "noa", "at": "code", "is": "make", "refs": { "in": "noa" }, "value": { "kind": "recovery code", "keys": [{ "key": common::public("code") }] } }));
+    let code = common::signed(json!({ "g": 10, "ts": 10, "arrived": 10, "by": "noa", "at": "code", "is": "make", "refs": { "in": "noa" }, "value": { "kind": "recovery code", "keys": [{ "key": common::public("code") }] } }));
     let t = with(&[code.clone(), grant(11, "code"), takeover(20, T0, "code")]);
     assert!(taken(&t, 11), "a take-over to her recovery code was refused: {}", why(&t, 11));
     assert!(taken(&t, 20), "her recovery code could not bring a key back: {}", why(&t, 20));

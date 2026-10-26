@@ -13,7 +13,7 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 fn request(by: &str, method: &str, path: &str, body: &[u8], ts: i64) -> Value {
-    common::signed(json!({ "g": 0, "ts": ts, "by": p(by), "at": p(by), "is": "request", "refs": {},
+    common::signed(json!({ "g": 0, "ts": ts, "arrived": ts, "by": p(by), "at": p(by), "is": "request", "refs": {},
         "value": { "method": method, "path": path, "body": hex(&Sha256::digest(body)) } }))
 }
 

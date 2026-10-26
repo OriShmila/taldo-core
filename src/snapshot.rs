@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 use imbl::{OrdMap, Vector};
 use std::sync::Arc;
 
-const MAGIC: &[u8] = b"taldo twin state 5\n";
+const MAGIC: &[u8] = b"taldo twin state 6\n";
 
 struct W(Vec<u8>);
 impl W {
@@ -117,6 +117,7 @@ impl Twin {
             w.s(&n.id);
             w.s(&n.kind);
             w.s(n.parent.as_deref().unwrap_or(""));
+            w.map(&n.who);
             w.map(&n.value);
             w.map(&n.accepted);
             w.gs(n.at.iter());
@@ -207,6 +208,7 @@ impl Twin {
                 id,
                 kind,
                 parent: (!parent.is_empty()).then_some(parent),
+                who: r.map()?,
                 value: r.map()?,
                 accepted: r.map()?,
                 at: r.gs()?,
