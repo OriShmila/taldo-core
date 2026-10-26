@@ -163,6 +163,24 @@ pub trait Run {
     fn running(&self) -> Answer<Vec<u64>>;
 }
 
+// ─── SANDBOX: where a level runs ───
+
+/// A LEVEL RUNS IN A SANDBOX, closed off from everything but what it is given: exactly the code its parent sealed, by hash — never
+/// code it chose, never changing itself. Its parent (above it, a source — never another sandbox) runs a hash, replaces it with
+/// another, stops it. Each adapter is one kind of box: a microVM on a server for a whole Taldo (a person's, a client's — the wall
+/// between people), code inside one person's Taldo (its own levels). What a level is told and answers is the same in every box
+pub trait Sandbox {
+    /// run `code` (a hash its parent sealed) as `level`, given `given` (what it may reach, as its parent says) — what runs there now
+    /// is replaced by it; the same hash again changes nothing
+    fn run(&self, level: &str, code: &str, given: &serde_json::Value) -> Answer<()>;
+    /// TELL a running level what happened (the record changed, a message came): what it answered — its proposals, or why it could not
+    fn tell(&self, level: &str, event: &serde_json::Value) -> Answer<serde_json::Value>;
+    /// stop it: nothing of it runs after
+    fn stop(&self, level: &str) -> Answer<()>;
+    /// the hash running as `level` now — none when nothing does
+    fn running(&self, level: &str) -> Answer<Option<String>>;
+}
+
 // ─── NET IN: being reached ───
 
 /// A REQUEST that reached Taldo: who made it (proven by the adapter, or None when nothing proved it), and what it asks

@@ -1,5 +1,5 @@
-//! SEALS — what code a node runs is said only by a level above it: never by the node itself, by what is under it or beside it, and
-//! no grant opens it. A seal is whole, and the newest one is what runs; nothing runs at a node deleted or blocked.
+//! SEALS — what code a node runs, and who it is, are set from above it: never by the node itself, by what is under it or beside it,
+//! and no grant opens them. A seal is whole, and the newest one is what runs; nothing runs at a node deleted or blocked.
 mod common;
 use taldo_core::twin::{fold, Twin};
 use serde_json::{json, Value};
@@ -54,14 +54,14 @@ fn a_level_above_seals_and_the_newest_seal_is_what_runs() {
 fn a_level_never_seals_itself_nor_what_is_beside_or_above_it_and_no_grant_opens_it() {
     for by in [ENGINE, "Ori › Taldo › engine › part", "Ori › Taldo › beside"] {
         let t = with(&[seal(10, by, whole('a'))]);
-        assert_eq!(why(&t, 10), format!("only a level above {ENGINE} seals it"), "sealed by {by}");
+        assert_eq!(why(&t, 10), format!("the code of {ENGINE} is set only from above it — never by itself, and never under a grant"), "sealed by {by}");
         assert_eq!(t.sealed(ENGINE), None);
     }
     // a grant to seal, from the very top, opens nothing
     let grant = act(10, "Ori", ENGINE, "grant", json!({}), json!({ "to": p("Ori › Taldo › beside"), "action": "seal" }));
     let t = with(&[grant, seal(11, "Ori › Taldo › beside", whole('a'))]);
     assert!(t.entries.contains_key(&10), "{:?}", t.rejected);
-    assert_eq!(why(&t, 11), format!("only a level above {ENGINE} seals it"));
+    assert_eq!(why(&t, 11), format!("the code of {ENGINE} is set only from above it — never by itself, and never under a grant"));
 }
 
 #[test]
@@ -111,31 +111,21 @@ fn nothing_runs_at_a_node_deleted_or_blocked() {
     assert_eq!(t.sealed(ENGINE), None, "blocked");
 }
 
-// CODE NEVER GOVERNS: the node a seal runs never changes what governs a node — its own keys, who carries it, what stays when it is
-// deleted, there or below — and never makes a person, a device or a recovery code; its plain details it writes as ever
+// WHO A NODE IS, LIKE WHAT IT RUNS, IS SET FROM ABOVE: its keys, who carries it, what stays when it is deleted — by a node above it,
+// never by itself (sealed or not), nor under a grant; a person, with nothing above them, says who they are; and a level sets who the
+// nodes under it are, and what they run, as any node above them does
 #[test]
-fn sealed_code_never_governs() {
-    let sealed = seal(10, "Ori › Taldo", whole('a'));
-    let t = with(&[sealed.clone(), act(11, ENGINE, ENGINE, "be", json!({}), json!({ "says": "ready" }))]);
-    assert!(t.entries.contains_key(&11), "its own plain detail was refused: {}", why(&t, 11));
-    for (g, at, k) in [(12, ENGINE, "keys"), (13, "Ori › Taldo › engine › part", "keys"), (14, ENGINE, "carried_by"), (15, ENGINE, "keep_deleted")] {
-        let t = with(&[sealed.clone(), act(g, ENGINE, at, "be", json!({}), json!({ k: [] }))]);
-        assert!(!t.entries.contains_key(&g), "sealed code set the {k} of {at}");
-        assert!(why(&t, g).contains("runs sealed code"), "{}", why(&t, g));
+fn who_a_node_is_is_set_from_above() {
+    for (g, by, at, k) in [(12, ENGINE, ENGINE, "keys"), (13, ENGINE, ENGINE, "carried_by"), (14, ENGINE, ENGINE, "keep_deleted"), (15, "Ori › Taldo › beside", ENGINE, "keys")] {
+        let t = with(&[act(g, by, at, "be", json!({}), json!({ k: [] }))]);
+        assert_eq!(why(&t, g), format!("the {k} of {at} is set only from above it — never by itself, and never under a grant"), "{by} set the {k} of {at}");
     }
-    let t = with(&[sealed.clone(), act(16, ENGINE, "Ori › Taldo › engine › someone", "make", json!({ "in": ENGINE }), json!({ "kind": "person" }))]);
-    assert!(!t.entries.contains_key(&16) && why(&t, 16).contains("never makes"), "sealed code made a person");
-    for (g, at, is, refs, value) in [
-        (17, ENGINE, "takeover", json!({}), json!({ "keys": [] })),
-        (18, "Ori › Taldo › engine › helper", "make", json!({ "in": ENGINE }), json!({ "kind": "agent", "keys": [] })),
-        (19, ENGINE, "grant", json!({}), json!({ "to": "Ori", "action": "take over" })),
-        (21, ENGINE, "grant", json!({}), json!({ "to": "Ori", "action": "make" })),
-        (20, "Ori › Taldo › engine › part", "seal", json!({}), whole('b')),
-    ] {
-        let t = with(&[sealed.clone(), act(g, ENGINE, at, is, refs, value)]);
-        assert!(!t.entries.contains_key(&g) && why(&t, g).contains("runs sealed code"), "sealed code wrote a {is}: {}", why(&t, g));
-    }
-    // before it was sealed, the same node set its own keys as any node does
-    let t = with(&[act(12, ENGINE, ENGINE, "be", json!({}), json!({ "keys": [] }))]);
-    assert!(t.entries.contains_key(&12), "{}", why(&t, 12));
+    // a grant to write its details is never a grant to say who it is
+    let grant = act(10, "Ori", ENGINE, "grant", json!({}), json!({ "to": p("Ori › Taldo › beside"), "action": "be" }));
+    let t = with(&[grant, act(11, "Ori › Taldo › beside", ENGINE, "be", json!({}), json!({ "says": "ready" })), act(12, "Ori › Taldo › beside", ENGINE, "be", json!({}), json!({ "keys": [] }))]);
+    assert!(t.entries.contains_key(&11), "{}", why(&t, 11));
+    assert!(!t.entries.contains_key(&12), "a grant to write details let its holder say who {ENGINE} is");
+    // from above: the level above it, and a level for the nodes under it — keys and code alike; a person for themselves
+    let t = with(&[act(10, ENGINE, "Ori › Taldo › engine › part", "be", json!({}), json!({ "keys": [] })), act(11, ENGINE, "Ori › Taldo › engine › part", "seal", json!({}), whole('b')), act(12, "Ori", "Ori", "be", json!({}), json!({ "keep_deleted": 1000 })), act(13, "Ori › Taldo", ENGINE, "be", json!({}), json!({ "keys": [] }))]);
+    assert!(t.rejected.is_empty(), "{:?}", t.rejected);
 }

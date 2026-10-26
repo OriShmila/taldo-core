@@ -150,6 +150,34 @@ pub fn run(r: &dyn Run, ends: &dyn Fn(i32) -> Job, killed: &dyn Fn(i32) -> Job, 
     Ok(())
 }
 
+/// SANDBOX: a level runs exactly the code it is given — `answers` a hash this environment has that answers what it is told, `other`
+/// another, `fails` one that cannot go on; replaced by another hash, the other runs; stopped, nothing runs and nothing is told; and a
+/// hash it does not have never runs
+pub fn sandbox(s: &dyn Sandbox, level: &str, answers: &str, other: &str, fails: &str) -> Result<(), String> {
+    let changed = serde_json::json!({ "changed": {} });
+    refused(s.run(level, "a hash that was never sealed", &serde_json::json!({})), "running code it does not have")?;
+    if ok(s.running(level), "running before any")?.is_some() {
+        return Err("a level ran before it was given code".into());
+    }
+    ok(s.run(level, answers, &serde_json::json!({})), "run")?;
+    if ok(s.running(level), "running")?.as_deref() != Some(answers) {
+        return Err(format!("{level} does not read as running {answers}"));
+    }
+    ok(s.tell(level, &changed), "tell a running level")?;
+    ok(s.run(level, other, &serde_json::json!({})), "run another hash")?;
+    if ok(s.running(level), "running after a replace")?.as_deref() != Some(other) {
+        return Err(format!("{level} still runs what it ran before {other}"));
+    }
+    ok(s.run(level, fails, &serde_json::json!({})), "run code that fails")?;
+    refused(s.tell(level, &changed), "telling code that cannot go on")?;
+    ok(s.stop(level), "stop")?;
+    if ok(s.running(level), "running after stop")?.is_some() {
+        return Err("a stopped level still runs".into());
+    }
+    refused(s.tell(level, &changed), "telling a stopped level")?;
+    Ok(())
+}
+
 /// NET IN: what is served answers every request whole — its method, path and body reach the handler as sent, the handler's status
 /// and body reach the caller as answered — and nothing is answered once stopped. `call` sends a request to the address served, the
 /// way a client of this environment would

@@ -172,6 +172,38 @@ impl Clock for FakeClock {
     }
 }
 
+// ─── Sandbox: levels whose code answers by its hash — "echo" (and "echo again") say back what they were told, "fails" cannot go on ───
+
+#[derive(Default)]
+pub struct FakeSandbox {
+    levels: Mutex<BTreeMap<String, String>>,
+}
+impl Sandbox for FakeSandbox {
+    fn run(&self, level: &str, code: &str, _given: &serde_json::Value) -> Answer<()> {
+        if !matches!(code, "echo" | "echo again" | "fails") {
+            return fail("sandbox", "run", format!("no code {code} is sealed here"));
+        }
+        self.levels.lock().unwrap().insert(level.into(), code.into());
+        done(())
+    }
+    fn tell(&self, level: &str, event: &serde_json::Value) -> Answer<serde_json::Value> {
+        match self.levels.lock().unwrap().get(level).map(String::as_str) {
+            Some("echo" | "echo again") => done(serde_json::json!({ "told": event })),
+            Some(_) => fail("sandbox", "tell", format!("{level} cannot go on")),
+            None => fail("sandbox", "tell", format!("nothing runs as {level}")),
+        }
+    }
+    fn stop(&self, level: &str) -> Answer<()> {
+        match self.levels.lock().unwrap().remove(level) {
+            Some(_) => done(()),
+            None => fail("sandbox", "stop", format!("nothing runs as {level}")),
+        }
+    }
+    fn running(&self, level: &str) -> Answer<Option<String>> {
+        done(self.levels.lock().unwrap().get(level).cloned())
+    }
+}
+
 // ─── Run: programs that end at once with a code ("exit:<code>"), or run until stopped ("forever") ───
 
 #[derive(Default)]

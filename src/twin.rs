@@ -185,7 +185,7 @@ fn meets(c: &Value, details: &dyn Fn(&str) -> Map<String, Value>) -> bool {
     let d = details(&id_of(&c["expect"]["at"]));
     has.iter().all(|(k, x)| d.get(k) == Some(x))
 }
-/// WHAT GOVERNS A NODE, as a detail: the keys it signs with, who carries it, what stays when it is deleted — set only by it or above it
+/// WHO A NODE IS, as its details: the keys it signs with, who carries it, what stays when it is deleted — set from above (`from_above`)
 pub const GOVERNING: [&str; 3] = ["keys", "carried_by", "keep_deleted"];
 /// A SEAL IS WHOLE: `wasm`, the module's hash; `cwasm`, its ready machine code's hash for each machine; `contract`, what it was built
 /// to; `reach`, what it may call — and nothing else
@@ -307,6 +307,13 @@ impl Twin {
             return None;
         }
         self.at_kind(node, "seal").next_back().map(|(g, _)| g)
+    }
+    /// SET FROM ABOVE: `by` is a node above `at` — or `at` itself when nothing is above it (a person says who they are)
+    fn from_above(&self, at: &str, by: &str) -> bool {
+        if at == by {
+            return self.parent(at).is_none();
+        }
+        self.within(at, by)
     }
     /// WHETHER A NODE IS BLOCKED: a `block` at it or above it
     pub fn blocked(&self, id: &str) -> bool {
@@ -644,13 +651,16 @@ impl Twin {
                 return Err(json!({ "g": e["g"], "why": "a take-over brings only keys, at the one it takes over for" }));
             }
         }
-        // A SEAL says what code a node runs. Only a level above the node says it — never the node itself, what is under it or beside
-        // it, and no grant opens it: a level never seals itself. It is whole: the module's hash, its ready machine code's hash for each
-        // machine, the contract it was built to, and what it reaches
-        if e["is"] == "seal" {
-            if at == by || !self.within(&at, &by) {
-                return Err(json!({ "g": e["g"], "why": format!("only a level above {at} seals it") }));
+        // WHAT A NODE RUNS AND WHO IT IS ARE SET FROM ABOVE: a seal (the code it runs, by hash) and its keys, who carries it and what
+        // stays when it is deleted — written only by a node above it, never by the node itself, what is under it or beside it, and
+        // under no grant; a person, with nothing above them, says who they are themselves. So nothing ever changes what it is or runs
+        let sets = (e["is"] == "seal").then(|| "code").or_else(|| (e["is"] == "be").then(|| GOVERNING.iter().find(|k| e["value"].get(**k).is_some()).copied()).flatten());
+        if let Some(what) = sets {
+            if !self.from_above(&at, &by) {
+                return Err(json!({ "g": e["g"], "why": format!("the {what} of {at} is set only from above it — never by itself, and never under a grant") }));
             }
+        }
+        if e["is"] == "seal" {
             if let Err(why) = seal_whole(&e["value"]) {
                 return Err(json!({ "g": e["g"], "why": why }));
             }
@@ -658,33 +668,6 @@ impl Twin {
         if e["is"] == "make" {
             if let Some(k) = e["value"].as_object().into_iter().flatten().map(|(k, _)| k).find(|k| *k != "kind" && *k != "keys") {
                 return Err(json!({ "g": e["g"], "why": format!("a make says only its kind (and keys) — its {k} is a detail after it") }));
-            }
-        }
-        // WHAT GOVERNS A NODE — the keys it signs with, who carries it, what stays when it is deleted — is changed only by the node itself
-        // or a node above it, never under a grant: a grant to write a node's details is never a grant to become it (a node made under a
-        // grant is given its first keys by its maker, as ever)
-        if e["is"] == "be" {
-            if let Some(k) = GOVERNING.iter().find(|k| e["value"].get(**k).is_some()) {
-                if !root && !self.within(&at, &by) {
-                    return Err(json!({ "g": e["g"], "why": format!("the {k} of {at} is set only by it or a node above it — never under a grant") }));
-                }
-            }
-        }
-        // CODE NEVER GOVERNS: a node with code sealed at it never changes what governs a node — not even its own, so no outside key ever
-        // signs as it — never makes who is who (a person, a device, a recovery code) and never seals: people and the levels above them do
-        if self.sealed(&by).is_some() {
-            if let Some(k) = (e["is"] == "be").then(|| GOVERNING.iter().find(|k| e["value"].get(**k).is_some())).flatten() {
-                return Err(json!({ "g": e["g"], "why": format!("{by} runs sealed code: it never sets the {k} of {at}") }));
-            }
-            if e["is"] == "make" && e["value"]["kind"].as_str().is_some_and(|k| matches!(k, "person" | "device" | "recovery code")) {
-                return Err(json!({ "g": e["g"], "why": format!("{by} runs sealed code: it never makes a {}", e["value"]["kind"]) }));
-            }
-            // nor gives keys any other way (a take-over, a node made with them), nor grants — what code may do never passes to a key —
-            // nor seals: what runs is said by a level above, never by code
-            let keys = e["is"] == "takeover" || (e["is"] == "make" && e["value"].get("keys").is_some());
-            if keys || e["is"] == "grant" || e["is"] == "seal" {
-                let what = if keys { "gives keys" } else if e["is"] == "grant" { "passes on what it may do" } else { "says what code runs" };
-                return Err(json!({ "g": e["g"], "why": format!("{by} runs sealed code: it never writes a {} that {what}", e["is"]) }));
             }
         }
         // AN ACT AT, OR ON, WHAT IS NOT YOURS (beside you, above you, another owner's): taken only under a grant in force on that node
