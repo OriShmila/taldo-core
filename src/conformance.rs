@@ -69,14 +69,18 @@ pub fn store(s: &dyn Store) -> Result<(), String> {
         s.to_bytes().iter().map(|x| format!("{x:02X}")).collect()
     };
     let e = |g: i64| serde_json::json!({ "g": g, "is": "be", "sig": { "sig": sig(g) }, "value": { "n": g } });
-    refused(s.append("a", &[e(1)]), "appending with no lease")?;
+    let erased = |g: i64| serde_json::json!({ "g": g, "is": "erased", "value": {} });
+    refused(s.keep("a", &[e(1)], &[], b"s"), "keeping with no lease")?;
     ok(s.lease("a"), "take the lease")?;
     ok(s.lease("a"), "the same holder taking it again")?;
     refused(s.lease("b"), "a second writer taking the lease")?;
-    refused(s.append("b", &[e(1)]), "appending by one who does not hold the lease")?;
-    ok(s.append("a", &[e(1), e(2)]), "append")?;
-    ok(s.append("a", &[e(5)]), "append again, with a gap")?;
-    refused(s.append("a", &[e(4)]), "appending an entry below the last row")?;
+    refused(s.keep("b", &[e(1)], &[], b"s"), "keeping by one who does not hold the lease")?;
+    ok(s.keep("a", &[e(1), e(2)], &[], b"state 1"), "keep")?;
+    ok(s.keep("a", &[e(5)], &[], b"state 2"), "keep again, with a gap")?;
+    refused(s.keep("a", &[e(4)], &[], b"state 3"), "keeping an entry below the last row")?;
+    if ok(s.state(), "read the state")?.as_deref() != Some(&b"state 2"[..]) {
+        return Err("the state did not read back whole, or a refused keep changed it".into());
+    }
     if s.entry(2) != Some(e(2)) || s.entry(3).is_some() {
         return Err("an entry did not read back exactly by its number".into());
     }
@@ -88,16 +92,14 @@ pub fn store(s: &dyn Store) -> Result<(), String> {
     if s.signed(&standard) != Some(2) || s.signed(&crate::identity::canonical_sig(&sig(3)).expect("a signature")).is_some() {
         return Err("an entry was not found by its signature's standard spelling (identity::canonical_sig)".into());
     }
-    refused(s.erase("b", &[serde_json::json!({ "g": 2, "is": "erased" })]), "erasing without the lease")?;
-    refused(s.erase("a", &[serde_json::json!({ "g": 3, "is": "erased" })]), "erasing a row never kept")?;
-    ok(s.erase("a", &[serde_json::json!({ "g": 2, "is": "erased", "value": {} })]), "erase a row")?;
-    if s.entry(2) != Some(serde_json::json!({ "g": 2, "is": "erased", "value": {} })) || s.signed(&standard).is_some() {
-        return Err("an erased row still reads as it was, or is still found by its signature".into());
+    // ALL OR NONE: an erase of a row never kept refuses the whole keep — the entry with it is not kept either
+    refused(s.keep("a", &[e(6)], &[erased(3)], b"state 4"), "erasing a row never kept")?;
+    if s.entry(6).is_some() || ok(s.state(), "read the state")?.as_deref() != Some(&b"state 2"[..]) {
+        return Err("a keep refused kept part of itself".into());
     }
-    refused(s.put_state("b", b"s"), "writing the state without the lease")?;
-    ok(s.put_state("a", b"state 1"), "write the state")?;
-    if ok(s.state(), "read the state")?.as_deref() != Some(&b"state 1"[..]) {
-        return Err("the state did not read back whole".into());
+    ok(s.keep("a", &[e(6)], &[erased(2)], b"state 5"), "keep a purge with what it erases")?;
+    if s.entry(2) != Some(erased(2)) || s.signed(&standard).is_some() || s.entry(6) != Some(e(6)) {
+        return Err("an erased row still reads as it was, or is still found by its signature".into());
     }
     refused(s.release("b"), "releasing a lease one does not hold")?;
     ok(s.release("a"), "release")?;

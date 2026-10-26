@@ -114,40 +114,28 @@ impl Store for FakeStore {
         *self.holder.lock().unwrap() = None;
         done(())
     }
-    fn append(&self, holder: &str, entries: &[serde_json::Value]) -> Answer<i64> {
-        self.holds(holder, "append")?;
+    fn keep(&self, holder: &str, entries: &[serde_json::Value], erased: &[serde_json::Value], state: &[u8]) -> Answer<i64> {
+        self.holds(holder, "keep")?;
         let mut rows = self.rows.lock().unwrap();
         let mut top = rows.keys().last().copied().unwrap_or(i64::MIN);
         for e in entries {
-            let Some(g) = e["g"].as_i64() else { return fail("store", "append", format!("an entry with no number: {e}")) };
+            let Some(g) = e["g"].as_i64() else { return fail("store", "keep", format!("an entry with no number: {e}")) };
             if g <= top {
-                return fail("store", "append", format!("entry {g} is not above every row kept ({top})"));
+                return fail("store", "keep", format!("entry {g} is not above every row kept ({top})"));
             }
             top = g;
         }
-        for e in entries {
-            rows.insert(e["g"].as_i64().unwrap(), e.clone());
+        if let Some(e) = erased.iter().find(|e| e["g"].as_i64().is_none_or(|g| !rows.contains_key(&g))) {
+            return fail("store", "keep", format!("no row kept as {} to erase", e["g"]));
         }
+        for e in entries.iter().chain(erased) {
+            rows.insert(e["g"].as_i64().expect("checked"), e.clone());
+        }
+        *self.state.lock().unwrap() = Some(state.to_vec());
         done(top)
     }
     fn state(&self) -> Answer<Option<Vec<u8>>> {
         done(self.state.lock().unwrap().clone())
-    }
-    fn put_state(&self, holder: &str, state: &[u8]) -> Answer<()> {
-        self.holds(holder, "put_state")?;
-        *self.state.lock().unwrap() = Some(state.to_vec());
-        done(())
-    }
-    fn erase(&self, holder: &str, erased: &[serde_json::Value]) -> Answer<()> {
-        self.holds(holder, "erase")?;
-        let mut rows = self.rows.lock().unwrap();
-        if let Some(e) = erased.iter().find(|e| e["g"].as_i64().is_none_or(|g| !rows.contains_key(&g))) {
-            return fail("store", "erase", format!("no row kept as {}", e["g"]));
-        }
-        for e in erased {
-            rows.insert(e["g"].as_i64().expect("checked"), e.clone());
-        }
-        done(())
     }
 }
 
@@ -453,7 +441,7 @@ impl Source for FakeSource<'_> {
         let words = input["words"].as_str().filter(|w| !w.trim().is_empty()).ok_or(Fail { seam: "source", call: "act", why: "nothing was asked".into(), retry: None })?;
         let record = self.record.ok_or(Fail { seam: "source", call: "act", why: "no record to ask".into(), retry: None })?;
         record.may(m).map_err(|why| Fail { seam: "source", call: "act", why, retry: None })?;
-        record.happened(m, &Cost::default()).map_err(|u| Fail { seam: "source", call: "act", why: u.to_string(), retry: None })?;
+        record.happened(m, &Cost::default()).map_err(|u| Fail { seam: "source", call: "act", why: u.words(), retry: None })?;
         done(serde_json::json!({ "says": format!("{} / {words}", input["system"].as_str().unwrap_or("")) }))
     }
 }
@@ -508,7 +496,7 @@ impl NetOut for FakeNetOut<'_> {
         }
         let answer = (self.answer)(url, &r);
         if let Some(m) = m {
-            self.record.happened(m, &Cost::default()).map_err(|why| Fail { seam: "net_out", call: "call", why: format!("it went out, but the record refused it: {why}"), retry: None })?;
+            self.record.happened(m, &Cost::default()).map_err(|u| Fail { seam: "net_out", call: "call", why: format!("it went out, and what happened was not written: {}", u.words()), retry: None })?;
         }
         done(answer)
     }

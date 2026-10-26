@@ -181,7 +181,7 @@ fn a_twin_folded_again_from_its_rows_is_the_same() {
     let store = std::sync::Arc::new(taldo_core::fakes::FakeStore::default());
     store.lease("t").unwrap();
     for e in &log {
-        store.append("t", std::slice::from_ref(e)).unwrap();
+        store.keep("t", std::slice::from_ref(e), &[], b"").unwrap();
     }
     let (a, b) = (fold(&log), Twin::refold(store));
     assert!(b.rejected.is_empty(), "{:?}", b.rejected);
@@ -334,4 +334,61 @@ fn code_never_decides_by_signing_as_a_node_of_its_own() {
     let t = fold(&es);
     assert!(!t.nodes.contains_key("S › c › d"), "code gave a node its keys by signing as its own child");
     assert!(!fold(&[first_key(ORI), act(1, ORI, "K", "make", json!({ "in": ORI }), json!({}))]).nodes.contains_key("K"), "a make that says no kind was taken");
+}
+
+// ─── THE THIRD REVIEW'S PROBES (26 Oct): the signer gated as the node it signs for; a move frozen as taken; a purge erases what was
+// said and keeps what decided, judging nothing again; the record's own kinds written by no one ───
+
+#[test]
+fn a_blocked_carrier_signs_as_no_one() {
+    let es = vec![
+        first_key(ORI),
+        make(1, ORI, "D", ORI, "device"),
+        act(2, ORI, ORI, "be", json!({}), json!({ "carried_by": ["D"] })),
+        act(3, ORI, "D", "block", json!({}), json!({})),
+        signed_by("D", json!({ "g": 5, "ts": 5, "arrived": 5, "by": ORI, "at": ORI, "is": "be", "refs": {}, "value": { "name": "set by a blocked device" } })),
+    ];
+    assert!(!fold(&es).entries.contains_key(&5), "a blocked device signed as the person it carries");
+}
+
+#[test]
+fn a_move_stays_made_when_who_carried_its_holder_changes() {
+    let mut es = vec![
+        first_key(ORI),
+        act(1, ORI, ORI, "grant", json!({}), json!({ "action": "join", "as": "Bob" })),
+        signed(json!({ "g": 2, "ts": 2, "arrived": 2, "by": "Bob", "at": "Bob", "is": "be", "refs": { "re": 1 }, "value": { "keys": [{ "key": public("Bob") }] } })),
+        act(3, ORI, ORI, "be", json!({}), json!({ "carried_by": ["Bob"] })),
+        make(4, ORI, "T", ORI, "thing"),
+        act(5, "T", "T", "ask", json!({ "about": "T" }), json!({ "label": "go", "moves": [{ "says": "ok", "act": { "is": "approve" }, "to": { "x": 1 } }] })),
+        signed_by("Bob", json!({ "g": 6, "ts": 6, "arrived": 6, "by": ORI, "at": "T", "is": "approve", "refs": { "re": 5 }, "value": {} })),
+    ];
+    assert!(fold(&es).moved(5).is_some(), "{:?}", fold(&es).rejected);
+    es.push(act(7, ORI, ORI, "be", json!({}), json!({ "carried_by": [] })));
+    assert!(fold(&es).moved(5).is_some(), "a move came undone when who carried its holder changed");
+}
+
+#[test]
+fn a_purge_judges_nothing_again_and_erased_is_written_by_no_one() {
+    let mut es = vec![
+        first_key(ORI),
+        act(1, ORI, ORI, "be", json!({}), json!({ "keep_deleted": 10 })),
+        make(2, ORI, "P", ORI, "thing"),
+        make(3, ORI, "Q", ORI, "thing"),
+        act(4, ORI, "P", "grant", json!({}), json!({ "action": "note", "to": "Q" })),
+        act(5, "Q", "Q", "note", json!({ "on": "P" }), json!({ "x": 1 })),
+        act(6, ORI, "P", "be", json!({}), json!({ "name": "Pat", "keys": [{ "key": public("P") }] })),
+        act(7, "P", "P", "erased", json!({}), json!({ "secret": "what P said" })),
+        act(8, ORI, "P", "delete", json!({}), json!({})),
+    ];
+    let t0 = fold(&es);
+    assert!(!t0.entries.contains_key(&7), "an entry of the record's own kind was written");
+    let sigs: Vec<Value> = t0.erasing(8).iter().map(|g| t0.entry(*g)["sig"]["sig"].clone()).collect();
+    es.push(act(100, ORI, "P", "purge", json!({ "re": 8 }), json!({ "sigs": sigs })));
+    let t = fold(&es);
+    assert!(t.entries.contains_key(&100), "{:?}", t.rejected);
+    assert!(t.entries.contains_key(&5) && t.rejected.iter().all(|r| r["g"] == 7), "an act taken under a grant that stays was judged again and lost: {:?}", t.rejected);
+    assert!(t.entries.contains_key(&4) && t.entry(4)["is"] == "grant", "the grant it stood on was erased");
+    assert_eq!(t.entry(6)["is"], "erased");
+    assert!(t.name("P").is_none() && signs(&t, "P").contains(&public("P")), "what P said stayed, or who P is went");
+    assert_eq!(t.owed_erasure().iter().map(|r| r["g"].as_i64().unwrap()).collect::<Vec<_>>(), vec![6], "the rows owed their erasing are not what the purge erased");
 }

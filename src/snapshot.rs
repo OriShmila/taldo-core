@@ -199,7 +199,8 @@ impl Twin {
     pub fn current(state: &[u8]) -> bool {
         state.starts_with(MAGIC)
     }
-    /// A TWIN AGAIN FROM ITS STATE (`snapshot`), its entries read from `source` — or why the state cannot be read
+    /// A TWIN AGAIN FROM ITS STATE (`snapshot`), its entries read from `source`, and every row kept after it folded on — or why the
+    /// state cannot be read
     pub fn restore(state: &[u8], source: Arc<dyn Source>) -> Result<Twin, String> {
         if !state.starts_with(MAGIC) {
             return Err("not a twin's state".into());
@@ -288,8 +289,21 @@ impl Twin {
         if kinds.len() != len || r.1 != state.len() {
             return Err("the state is not whole".into());
         }
-        t.entries = Entries::restored(source, names, kinds);
+        t.entries = Entries::restored(source.clone(), names, kinds);
         t.entries.set_indexes(with);
+        // ROWS KEPT AFTER THE STATE: every one folded on it, so a state behind its rows never reads the record short
+        let (mut from, refused) = (t.entries.top() + 1, t.rejected.len());
+        loop {
+            let page = source.page(from, i64::MAX, false, 1024);
+            let Some(last) = page.last().map(|(g, _)| *g) else { break };
+            for (_, e) in page {
+                t.apply(&e);
+            }
+            from = last + 1;
+        }
+        if t.rejected.len() > refused {
+            return Err(format!("rows kept after the state are refused: {:?}", t.rejected.iter().skip(refused).take(5).collect::<Vec<_>>()));
+        }
         Ok(t)
     }
 }

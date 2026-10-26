@@ -39,10 +39,13 @@ pub enum Unwritten {
     Refused(String),
     Failed(String),
 }
-impl core::fmt::Display for Unwritten {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl Unwritten {
+    /// IN WORDS, where it must be words (an agent's answer, a start that stopped, a seam's fault): which it was, and why — the one way
+    /// it is said
+    pub fn words(&self) -> String {
         match self {
-            Unwritten::Refused(why) | Unwritten::Failed(why) => f.write_str(why),
+            Unwritten::Refused(why) => format!("refused: {why}"),
+            Unwritten::Failed(why) => format!("could not be kept: {why}"),
         }
     }
 }
@@ -129,15 +132,13 @@ pub trait Store: crate::rows::Source {
     fn lease(&self, holder: &str) -> Answer<()>;
     /// give it up: refused when `holder` does not hold it
     fn release(&self, holder: &str) -> Answer<()>;
-    /// keep entries the twin took, as rows by their number (`g`), as the lease's holder: refused for anyone else, and for an entry
-    /// whose number is not above every row kept
-    fn append(&self, holder: &str, entries: &[serde_json::Value]) -> Answer<i64>;
+    /// KEEP, AS ONE — all of it, or none: entries the twin took, as rows by their number (`g`), each above every row kept; rows a purge
+    /// erased, each replaced by what stays of it (`twin::erased_row`), found by its signature no more; and the twin's state after them
+    /// — as the lease's holder; refused for anyone else, for an entry not above every row, and for an erased row never kept. The
+    /// number of the last row kept
+    fn keep(&self, holder: &str, entries: &[serde_json::Value], erased: &[serde_json::Value], state: &[u8]) -> Answer<i64>;
     /// the twin's state written last, whole
     fn state(&self) -> Answer<Option<Vec<u8>>>;
-    fn put_state(&self, holder: &str, state: &[u8]) -> Answer<()>;
-    /// ROWS ERASED: each kept row numbered as one of `rows` replaced by it — what stays of an entry a purge erased (`twin::erased_row`),
-    /// found by its signature no more — as the lease's holder; refused for anyone else, and for a number never kept
-    fn erase(&self, holder: &str, rows: &[serde_json::Value]) -> Answer<()>;
 }
 
 // ─── CLOCK: time, and timers that outlive a restart ───
