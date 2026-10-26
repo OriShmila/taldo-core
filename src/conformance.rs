@@ -91,14 +91,15 @@ pub fn store(s: &dyn Store) -> Result<(), String> {
     if s.signed(&standard) != Some(2) || s.signed(&crate::identity::canonical_sig(&sig(3)).expect("a signature")).is_some() {
         return Err("an entry was not found by its signature's standard spelling (identity::canonical_sig)".into());
     }
-    // ALL OR NONE: forgetting a row never kept refuses the whole keep — the entry with it is not kept either
-    refused(s.keep("a", &[e(6)], &[3], b"state 4"), "forgetting a row never kept")?;
+    // ALL OR NONE: erasing a row never kept refuses the whole keep — the entry with it is not kept either
+    let erased = |g: i64| serde_json::json!({ "g": g, "is": "be", "value": {}, "sig": { "sig": sig(g) }, "erased_by": 6 });
+    refused(s.keep("a", &[e(6)], &[erased(3)], b"state 4"), "erasing a row never kept")?;
     if s.entry(6).is_some() || ok(s.state(), "read the state")?.as_deref() != Some(&b"state 2"[..]) {
         return Err("a keep refused kept part of itself".into());
     }
-    ok(s.keep("a", &[e(6)], &[2], b"state 5"), "keep a purge with the rows it erases forgotten")?;
-    if s.entry(2).is_some() || s.signed(&standard).is_some() || s.entry(6) != Some(e(6)) || gs(s.page(1, 6, false, 10)) != vec![1, 5, 6] {
-        return Err("a forgotten row still reads, is walked, or is found by its signature".into());
+    ok(s.keep("a", &[e(6)], &[erased(2)], b"state 5"), "keep a purge with what stays of the row it erases")?;
+    if s.entry(2) != Some(erased(2)) || s.signed(&standard) != Some(2) || s.entry(6) != Some(e(6)) {
+        return Err("an erased row does not read as what stays of it, or is not found by its signature still".into());
     }
     refused(s.release("b"), "releasing a lease one does not hold")?;
     ok(s.release("a"), "release")?;

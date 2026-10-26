@@ -96,8 +96,9 @@ pub fn canonical_sig(sig: &str) -> Option<String> {
     let s = Signature::from_der(&bytes).or_else(|_| Signature::from_slice(&bytes)).ok()?;
     Some(b64hex(&s.normalize_s().to_bytes()))
 }
-/// THE KEY THAT SIGNED the entry's act, and whether a person was there — or why none did
-fn signer(e: &Value) -> Result<(String, bool), String> {
+/// THE KEY THAT SIGNED the entry's act, and whether a person was there — or why none did. Read alone, with no twin: what a mark says
+/// signed a line is held to the line by this (`twin::read`)
+pub fn signer(e: &Value) -> Result<(String, bool), String> {
     let p = &e["sig"];
     let key = p["key"].as_str().ok_or("it is not signed")?.to_string();
     let k = VerifyingKey::from_sec1_bytes(&unhex(&key).ok_or("its key is not hex")?)
@@ -137,6 +138,12 @@ fn signer(e: &Value) -> Result<(String, bool), String> {
         }
     }
 }
+/// WHETHER `sig` (`{ key, sig }`, as Keys signs) SIGNS `bytes` — or why not
+pub fn holds(bytes: &[u8], sig: &Value) -> Result<(), String> {
+    let k = VerifyingKey::from_sec1_bytes(&unhex(sig["key"].as_str().ok_or("it names no key")?).ok_or("its key is not hex")?).map_err(|_| "its key is not a key")?;
+    let s = Signature::from_slice(&unhex(sig["sig"].as_str().ok_or("it is not signed")?).ok_or("its signature is not hex")?).map_err(|_| "its signature is not a signature")?;
+    k.verify(bytes, &s).map_err(|_| "the signature does not match".to_string())
+}
 /// signatures already verified, with a hash of what they signed, and whether a person was there: each checked once however often a
 /// log is folded
 static VERIFIED: Mutex<Option<BTreeMap<(String, String), (String, bool)>>> = Mutex::new(None);
@@ -147,6 +154,8 @@ const VERIFIED_AT_MOST: usize = 4_096;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Signed {
     pub signer: String,
+    /// the key that signed it (SEC1, hex) — none for a person's very first key, unsigned at the record's beginning
+    pub key: String,
     pub present: bool,
 }
 /// THE NODES WHOSE KEYS SIGN FOR A NODE — the one answer to it, for entries and requests alike: itself and every node above it, and
@@ -194,7 +203,7 @@ pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<Signed, String> {
         && e["value"]["keys"].is_array()
         && keys.is_empty();
     if first && e["sig"].is_null() && t.nodes.is_empty() {
-        return Ok(Signed { signer: by, present: false });
+        return Ok(Signed { signer: by, key: String::new(), present: false });
     }
     // HELD BY ITS SIGNATURE AND A HASH OF WHAT WAS SIGNED — never the words themselves: what a purge erased is held nowhere
     let seen = (
@@ -231,8 +240,8 @@ pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<Signed, String> {
     if v.len() >= VERIFIED_AT_MOST {
         v.clear();
     }
-    v.insert(seen, (k, present));
-    Ok(Signed { signer, present: present || marked })
+    v.insert(seen, (k.clone(), present));
+    Ok(Signed { signer, key: k, present: present || marked })
 }
 
 /// A REQUEST SIGNED AS AN ACT: a screen or an agent proves who makes a request the way every entry proves who wrote it — the act

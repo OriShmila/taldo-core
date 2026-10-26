@@ -55,12 +55,9 @@ impl Rows {
 
 /// AN ENTRY IN, as a program keeps rows: checked, written as its row only when taken, then landed
 fn take(t: &mut Twin, rows: &Rows, e: &Value, arrived: i64) {
-    match t.admit(e, arrived) {
-        // kept as the keeper keeps it: with when it arrived
-        Ok(present) => {
-            rows.put(&taldo_core::twin::kept(e, arrived));
-            t.land(e, &present, arrived);
-        }
+    // kept as the keeper keeps it: marked, with when it arrived
+    match t.take(e, arrived, common::TALDO, &common::mark_sign) {
+        Ok((row, _)) => rows.put(&row),
         Err(why) => t.rejected.push_back(why),
     }
 }
@@ -71,7 +68,10 @@ fn said(t: &Twin) -> Value {
     let entries: Vec<Value> = t.entries.iter().map(|(g, e)| {
         let ask = (e["is"] == "ask").then(|| json!({ "open": t.ask_open(g), "holder": t.holder_of(g), "moved": t.moved(g), "joins": t.joins(g), "evidence": t.evidence(g) }));
         let hold = (e["is"] == "acceptance").then(|| json!({ "holds": t.holds(g), "unanswered": t.unanswered(g) }));
-        json!({ "g": g, "e": *e, "accepted": t.accepted(g), "present": t.present(g), "kind": t.entries.kind_of(g), "ask": ask, "hold": hold })
+        // the line as it was written: a kept row carries Taldo's mark beside it
+        let mut line = (*e).clone();
+        line.as_object_mut().map(|o| o.remove("mark"));
+        json!({ "g": g, "e": line, "accepted": t.accepted(g), "present": t.present(g), "kind": t.entries.kind_of(g), "ask": ask, "hold": hold })
     }).collect();
     let rejected: Vec<Value> = t.rejected.iter().map(|r| json!([r["g"], r["why"]])).collect();
     json!({ "nodes": nodes, "entries": entries, "rejected": rejected, "owed": t.owed(), "len": t.entries.len(), "top": t.entries.top() })

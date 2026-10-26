@@ -77,33 +77,24 @@ fn a_purge_erases_what_it_held_after_the_waiting_and_keeps_the_skeleton() {
     let t = with(&log);
     let erased = t.erasing(20);
     assert_eq!(erased, vec![6, 7], "what the purge erases: every entry at Dana and under her but the makes and the delete");
-    let lines = t.purging(20);
-    let purge = |g: i64, ts: i64| common::signed(json!({ "g": g, "ts": ts, "arrived": ts, "by": "taxorg", "at": "dana", "is": "purge", "refs": { "re": 20 }, "value": { "lines": lines } }));
+    let purge = |g: i64, ts: i64| common::signed(json!({ "g": g, "ts": ts, "arrived": ts, "by": "taxorg", "at": "dana", "is": "purge", "refs": { "re": 20 }, "value": { "lines": [6, 7] } }));
     // before the waiting is over: refused
     let t = with(&[keep(19), delete(20, 20, "dana"), purge(21, 20 + KEEP - 1)]);
     assert!(!taken(&t, 21), "a purge was taken before the waiting was over");
-    // after it, taken — and the record without what it erased folds to the skeleton
+    // after it, taken: what it held says nothing any more, and what stays of each line is all its keeper keeps (`erased_row`)
     let t = with(&[keep(19), delete(20, 20, "dana"), purge(21, 20 + KEEP)]);
     assert!(taken(&t, 21), "{}", why(&t, 21));
-    // ERASED, NOT HIDDEN: what it held is no line any more, and its rows are what the store forgets (`forgets`)
     for g in [6, 7] {
-        assert!(t.entries.get(&g).is_none(), "entry {g} still says what it said");
+        assert!(t.entries.get(&g).is_some_and(|e| e["value"] == json!({}) && e["erased_by"] == 21), "entry {g} still says what it said");
     }
     assert_eq!((t.name("dana"), t.nodes["form"].value.get("id")), (None, None), "what was erased is still read off its node");
-    assert_eq!(Twin::forgets(&purge(21, 20 + KEEP)), vec![6, 7]);
-    let mut after: Vec<Value> = world().into_iter().filter(|e| !erased.contains(&e["g"].as_i64().unwrap())).collect();
-    after.extend([keep(19), delete(20, 20, "dana"), purge(21, 20 + KEEP)]);
-    let t = fold(&after);
-    assert!(t.rejected.is_empty(), "the record after a purge does not fold: {:?}", t.rejected);
+    assert_eq!(Twin::lines_named(&purge(21, 20 + KEEP)), vec![6, 7]);
     assert_eq!(t.nodes["dana"].kind, "outside");
-    assert_eq!(t.name("dana"), None, "who she was is still there");
-    assert!(t.nodes["form"].value.get("id").is_none());
     assert!(taken(&t, 8), "what the org wrote pointing to her was lost");
-    // an erased act given again: never taken
-    let mut replay = after.clone();
-    replay.push(world()[6].clone());
-    let t = fold(&replay);
-    assert!(!taken(&t, 6), "an erased act was taken again");
+    // an erased act given again, under a new number: never taken
+    let mut again = world()[6].clone();
+    again["g"] = json!(30);
+    assert!(t.admit(&again, 30).is_err(), "an erased act was taken again");
     // undone before the purge: no purge
     let undone = common::touched(json!({ "g": 21, "ts": 21, "arrived": 21, "by": "taxowner", "at": "dana", "is": "restore", "refs": { "re": 20 }, "value": {} }));
     let t = with(&[keep(19), delete(20, 20, "dana"), undone, purge(22, 20 + KEEP)]);

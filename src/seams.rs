@@ -132,12 +132,12 @@ pub trait Store: crate::rows::Source {
     fn lease(&self, holder: &str) -> Answer<()>;
     /// give it up: refused when `holder` does not hold it
     fn release(&self, holder: &str) -> Answer<()>;
-    /// KEEP, AS ONE — all of it, or none: entries the twin took, as rows by their number (`g`), each above every row kept; the rows a
-    /// purge among them erased (`Twin::forgets`), forgotten — gone whole, found by nothing, and no byte of them left in any file or copy
-    /// the store keeps (a journal, a log, a page freed) once the keep returns;
-    /// and the twin's state after them — as the lease's holder; refused for anyone else, for an entry not above every row, and for a
-    /// row to forget that is not kept. No row is ever changed. The number of the last row kept
-    fn keep(&self, holder: &str, entries: &[serde_json::Value], forget: &[i64], state: &[u8]) -> Answer<i64>;
+    /// KEEP, AS ONE — all of it, or none: entries the twin took, as rows by their number (`g`), each above every row kept; for a
+    /// purge among them, what stays of each line it erases (`twin::erased_row`) in place of that line's row — found by its signature
+    /// still, and no byte of what it said left in any file or copy the store keeps once the keep returns; and the twin's state after
+    /// them — as the lease's holder; refused for anyone else, for an entry not above every row, and for an erased row in place of no
+    /// row kept. No other row is ever changed. The number of the last row kept
+    fn keep(&self, holder: &str, entries: &[serde_json::Value], erased: &[serde_json::Value], state: &[u8]) -> Answer<i64>;
     /// the twin's state written last, whole
     fn state(&self) -> Answer<Option<Vec<u8>>>;
 }

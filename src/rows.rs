@@ -216,6 +216,17 @@ impl Entries {
             self.mem.insert(g, v);
         }
     }
+    /// NO ENTRY YET, read from the same rows, as the same overlay, keeping the same details indexed: what a twin made again from its
+    /// lines starts from
+    pub(crate) fn fresh(&self) -> Entries {
+        Entries {
+            source: self.source.clone(),
+            overlay: self.overlay,
+            rows_to: self.rows_to,
+            with: self.with.keys().map(|f| (f.clone(), Vector::new())).collect(),
+            ..Default::default()
+        }
+    }
     /// THE ENTRIES PENDING, KEPT AS ROWS by their keeper (or read from them): from now on read from the rows
     pub(crate) fn rows_kept(&mut self) {
         self.pending.clear();

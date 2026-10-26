@@ -158,23 +158,20 @@ impl Twin {
             w.gs(l.iter());
         }
         w.gs(self.present.iter());
-        w.u(self.erased.len() as u64);
-        for x in &self.erased {
-            w.s(x);
-        }
-        w.u(self.stopped.len() as u64);
-        for (g, (by, row)) in &self.stopped {
+        w.u(self.taken_out.len() as u64);
+        for (g, o) in &self.taken_out {
             w.i(*g);
-            w.i(*by);
-            w.json(row.as_deref().unwrap_or(&Value::Null));
+            w.i(o.by);
+            w.s(&o.at);
+            w.s(&o.writer);
+            w.s(&o.is);
         }
-        w.u(self.gaps.len() as u64);
-        for (g, (p, l)) in &self.gaps {
+        w.u(self.erased.len() as u64);
+        for (g, p) in &self.erased {
             w.i(*g);
             w.i(*p);
-            w.json(l);
         }
-        w.gs(self.landed.iter());
+        w.s(&self.head);
         let (names, kinds) = self.entries.kinds();
         w.u(names.len() as u64);
         for n in names {
@@ -272,21 +269,18 @@ impl Twin {
             t.rewritten.insert(g, r.gs()?);
         }
         t.present = r.gs()?.into_iter().collect();
-        // what was erased, kept in its standard spelling
-        t.erased = (0..r.n()?).map(|_| r.s()).collect::<Result<_, _>>()?;
-        // the lines taken out, each with what took it out and its row while it is kept; the lines erased, each with its purge and what
-        // stays of it; which of those count
+        // the lines taken out — each with what took it out, where it was, by whom and its kind; the lines erased, each with its purge;
+        // the last mark's hash
         for _ in 0..r.n()? {
             let g = r.i()?;
             let by = r.i()?;
-            let row = r.json()?;
-            t.stopped.insert(g, (by, (!row.is_null()).then(|| Arc::new(row))));
+            t.taken_out.insert(g, crate::twin::Out { by, at: r.s()?, writer: r.s()?, is: r.s()?, line: None });
         }
         for _ in 0..r.n()? {
             let g = r.i()?;
-            t.gaps.insert(g, (r.i()?, r.json()?));
+            t.erased.insert(g, r.i()?);
         }
-        t.landed = r.gs()?.into_iter().collect();
+        t.head = r.s()?;
         let names: Vec<String> = (0..r.n()?).map(|_| r.s()).collect::<Result<_, _>>()?;
         let len = r.n()?;
         let mut kinds: Vec<u32> = Vec::with_capacity(len.min(1 << 26));
@@ -308,20 +302,20 @@ impl Twin {
         }
         t.entries = Entries::restored(source.clone(), names, kinds);
         t.entries.set_indexes(with);
-        // ROWS KEPT AFTER THE STATE: every one folded on it, so a state behind its rows never reads the record short
-        let (mut from, refused) = (t.entries.top() + 1, t.rejected.len());
+        // ROWS KEPT AFTER THE STATE: every one read on it as any row is (`Twin::read`), so a state behind its rows never reads the
+        // record short
+        let mut reading = crate::twin::Reading::default();
+        let mut from = t.entries.top().max(t.taken_out.keys().next_back().copied().unwrap_or(0)) + 1;
         loop {
             let page = source.page(from, i64::MAX, false, 1024);
             let Some(last) = page.last().map(|(g, _)| *g) else { break };
-            for (_, e) in page {
-                t.apply(&e);
+            for (_, e) in &page {
+                t.read(e, &mut reading).map_err(|why| format!("a row kept after the state: {why}"))?;
             }
             from = last + 1;
         }
+        reading.done()?;
         t.entries.rows_kept();
-        if t.rejected.len() > refused {
-            return Err(format!("rows kept after the state are refused: {:?}", t.rejected.iter().skip(refused).take(5).collect::<Vec<_>>()));
-        }
         Ok(t)
     }
 }

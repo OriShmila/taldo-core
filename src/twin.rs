@@ -56,12 +56,18 @@
 //! DELETING: a `delete` at a node hides it and everything under it at once — no act lands at or on it,
 //! nothing about it is asked or owed — and a `restore` answering it brings it back. It is taken only once the owner said how long a
 //! deletion waits (`keep_deleted`, ms, a detail of the node or one above it). When that is over, a `purge` answering it erases what it held: every entry at it and under it but what decided who may do what (`erasing`).
-//! STOPPING: no line is ever changed. A line is taken out by a later line that points to it — a `stop` (something that got in and
-//! must not count: it, and whatever stood on it, falls) or a `purge` (what a deleted node said, erased by law). Every fold reads the
-//! stops first and passes over each line they name; the stopping line itself is judged in its place like any other, and a stop
-//! that is not taken stops nothing. A purge carries, signed by its writer and checked against each line when it arrives, what
-//! stays of every line it erases (`stays`): where it was, by whom, its kind and signature — and, of a line that said who a node is,
-//! only that — never a word it said. Its rows are then forgotten by the store; the signatures stay, so none is taken again.
+//! JUDGED ONCE: a line is judged when it arrives (`admit`), and its keeper keeps it with Taldo's MARK (`take`) — what admission found
+//! (who signed it, with which key, whether a person was there), the line's fingerprint and when it arrived, chained to the mark
+//! before and signed by a Taldo of the record's person. A start reads the rows (`refold`): every mark checked, every line landed as
+//! it was taken, none judged again — so what a line stood on may change, or be erased, and it stays what it was. A row changed, put
+//! in or taken away breaks the chain: the record is not read.
+//! TAKING OUT acts from then on: a `take out` names lines — at its node or under it, by their writer or a node under them, from above
+//! — and from it on they have no effect; they stay in the rows as what happened, and nothing else is taken out unless named. A take-out
+//! taken out brings back what it took out. A node's coming to be is never taken out (the node is deleted), nor a delete (it is
+//! restored) nor a purge.
+//! ERASING, by law: a `purge` names exactly what its delete erases (`erasing`); its keeper keeps, in place of each of those rows, what
+//! stays of it (`erased_row`) — where it was, by whom, its kind, its signature's own and its mark, never a word — and the store keeps
+//! no byte of what it said. Nothing answers what was erased.
 //! IDENTITY KINDS: how something outside proves who it is is the Identity seam's (`seams`); what is let in by a kind names it
 //! (`refs.as` on its make). A `block` at a node means it, and all under it, signs nothing from then on.
 //! GETTING BACK IN: a synced passkey is the same key on a new device — nothing to do. For the rest, a person grants their own ways
@@ -127,15 +133,23 @@ pub struct Twin {
     pub(crate) signatures: OrdSet<String>,
     /// the entries signed with a person there (`identity`) — a fact for holds to read, never required here
     pub(crate) present: OrdSet<i64>,
-    /// the signatures of every line taken out or erased, in their standard spelling: never taken again
-    pub(crate) erased: OrdSet<String>,
-    /// THE LINES TAKEN OUT (`take out`), each with the line that took it out — they count for nothing — and its row while it is kept
-    /// (none once a purge erased it)
-    pub(crate) stopped: OrdMap<i64, (i64, Option<Arc<Value>>)>,
-    /// THE LINES A PURGE ERASED, whose rows are forgotten: each with its purge and what stays of it (`stays`, as the purge says it)
-    pub(crate) gaps: OrdMap<i64, (i64, Value)>,
-    /// the erased lines that count, in their places: what each said of who a node is landed
-    pub(crate) landed: OrdSet<i64>,
+    /// THE LINES TAKEN OUT (`take out`): from the line that took each out, it has no effect — it stays in the rows, as what happened
+    pub(crate) taken_out: OrdMap<i64, Out>,
+    /// THE LINES A PURGE ERASED, each with its purge: their words are gone from the rows, what stays of each is `erased_row`
+    pub(crate) erased: OrdMap<i64, i64>,
+    /// THE LAST MARK'S HASH: the next mark is chained to it (`mark`) — empty before the first
+    pub(crate) head: String,
+}
+
+/// A LINE TAKEN OUT: the take-out that took it out, and where it was, by whom and of what kind — never what it said. A twin folded
+/// from a list, with no rows, holds the line itself, so a take-out taken out brings it back
+#[derive(Clone, Debug)]
+pub struct Out {
+    pub by: i64,
+    pub at: String,
+    pub writer: String,
+    pub is: String,
+    pub(crate) line: Option<Arc<Value>>,
 }
 
 impl Twin {
@@ -146,23 +160,43 @@ impl Twin {
             ..Default::default()
         }
     }
-    /// A TWIN FOLDED AGAIN FROM ITS ROWS, oldest first, each as it arrived — when no state of this twin's own is kept (none yet, or
-    /// one an older twin wrote, `snapshot::current`)
-    pub fn refold(source: Arc<dyn Source>) -> Twin {
-        let rows = |each: &mut dyn FnMut(&Value)| {
-            let mut from = 0;
-            loop {
-                let page = source.page(from, i64::MAX, false, 1024);
-                let Some(last) = page.last().map(|(g, _)| *g) else { break };
-                for (_, e) in &page {
-                    each(e);
-                }
-                from = last + 1;
+    /// THE TWIN READ FROM ITS ROWS, oldest first: each row's mark checked — chained to the one before, signed by a Taldo of the record's
+    /// person, the line as it was marked and signed by the key the mark names — and its effect landed; no line is judged again: it was
+    /// judged once, when it arrived (`take`). Or why the rows are not what was kept
+    pub fn refold(source: Arc<dyn Source>) -> Result<Twin, String> {
+        let mut t = Twin::stored(source.clone());
+        let mut reading = Reading::default();
+        let mut from = 0;
+        loop {
+            let page = source.page(from, i64::MAX, false, 1024);
+            let Some(last) = page.last().map(|(g, _)| *g) else { break };
+            for (_, e) in &page {
+                t.read(e, &mut reading)?;
             }
-        };
-        let mut t = folded(&rows, &|| Twin::stored(source.clone()));
+            from = last + 1;
+        }
+        reading.done()?;
         t.entries.rows_kept();
-        t
+        Ok(t)
+    }
+}
+
+/// WHAT A READING OF ROWS STILL OWES: marks made before their Taldo's node was (checked once it is), and rows erased whose purge
+/// is still to come
+#[derive(Default)]
+pub(crate) struct Reading {
+    early: Vec<Value>,
+    erased: BTreeMap<i64, i64>,
+}
+impl Reading {
+    pub(crate) fn done(self) -> Result<(), String> {
+        if let Some(m) = self.early.first() {
+            return Err(format!("#{}'s mark is by {}, which never was a Taldo of the record's person", m["g"], m["by"]));
+        }
+        if let Some((g, p)) = self.erased.iter().next() {
+            return Err(format!("#{g} has no words, and #{p}, the purge it says erased it, never did"));
+        }
+        Ok(())
     }
 }
 
@@ -178,47 +212,15 @@ impl Twin {
     }
 }
 
+/// LINES ARRIVING IN ORDER, held in memory and never kept: each judged as it arrives (`admit`) and landed — what a list of lines
+/// comes to. Kept lines are read with `refold`
 pub fn fold(entries: &[Value]) -> Twin {
-    folded(&|each: &mut dyn FnMut(&Value)| entries.iter().for_each(|e| each(e)), &Twin::default)
-}
-/// THE ONE FOLD: every line lands in order, judged in its place — a line that takes others out is judged there by the one rule, as
-/// when it arrived. Read ahead is only what no row holds any more: each line a purge erased, which the purge claims, with what stays
-/// of it — landed in its place, and held to the purge when the purge is judged; a claim on a number whose row is kept is no claim. A
-/// purge not taken claims nothing: the lines are folded again without its claims, until every claim landed is a purge's that was taken
-fn folded(rows: &dyn Fn(&mut dyn FnMut(&Value)), empty: &dyn Fn() -> Twin) -> Twin {
-    let mut claims: BTreeMap<i64, Vec<(i64, Value)>> = BTreeMap::new();
-    rows(&mut |e| {
-        if let (Some("purge"), Some(p)) = (e["is"].as_str(), e["g"].as_i64()) {
-            for l in e["value"]["lines"].as_array().into_iter().flatten() {
-                if let Some(g) = l["g"].as_i64() {
-                    claims.entry(g).or_default().push((p, l.clone()));
-                }
-            }
-        }
-    });
-    loop {
-        let mut t = empty();
-        let mut done = -1;
-        rows(&mut |e| {
-            let Some(g) = e["g"].as_i64() else {
-                t.rejected.push_back(json!({ "g": e["g"], "why": "a row with no number" }));
-                return;
-            };
-            t.gaps_before(g, &claims, &mut done);
-            t.apply(e);
-            done = done.max(g);
-        });
-        t.gaps_before(i64::MAX, &claims, &mut done);
-        let refused: BTreeSet<i64> = t.gaps.values().map(|(p, _)| *p).filter(|p| !t.entries.contains_key(p)).collect();
-        if refused.is_empty() {
-            return t;
-        }
-        for c in claims.values_mut() {
-            c.retain(|(p, _)| !refused.contains(p));
-        }
+    let mut t = Twin::default();
+    for e in entries {
+        t.apply(e);
     }
+    t
 }
-
 fn id_of(v: &Value) -> String {
     parse_id(v).unwrap_or_default()
 }
@@ -333,15 +335,51 @@ pub fn core_kind(is: &str) -> bool {
 /// WHAT DECIDED WHO MAY DO WHAT: never erased by a purge, never taken out — acts elsewhere were taken under them, and none holds a
 /// word anyone said
 const DECIDING: [&str; 11] = ["make", "delete", "restore", "purge", "take out", "grant", "revoke", "seal", "block", "takeover", "decline"];
-/// WHAT STAYS OF A LINE TAKEN OUT OR ERASED, as the line doing it says it: its number, where it was, by whom, its kind, its signature
-/// — nothing it said. What an erased line said of who a node is (`who`), and the line that gave the key it was signed with
-/// (`keyed_by`), are the purge's (`Twin::purging`)
-fn stays(e: &Value) -> Value {
-    json!({ "g": e["g"], "by": e["by"], "at": e["at"], "is": e["is"], "sig": e["sig"]["sig"] })
+/// WHAT STAYS OF A LINE A PURGE ERASED: its number, where it was, by whom, its kind, what it answered or named (ids and numbers),
+/// when it arrived, its signature's own (so the same act is never taken again) and its mark — never a word it said — and the purge
+pub fn erased_row(row: &Value, purge: i64) -> Value {
+    json!({ "g": row["g"], "by": row["by"], "at": row["at"], "is": row["is"], "refs": row["refs"], "value": {}, "arrived": row["arrived"], "sig": { "sig": row["sig"]["sig"] }, "mark": row["mark"], "erased_by": purge })
 }
-/// what stays of a line, without what a purge adds (`who`, `keyed_by`): as a take-out names it
-fn bare(l: &Value) -> Value {
-    json!({ "g": l["g"], "by": l["by"], "at": l["at"], "is": l["is"], "sig": l["sig"] })
+/// ONE JSON VALUE IN ONE SPELLING: every object's keys in order
+fn canonical(v: &Value) -> String {
+    fn sorted(v: &Value) -> Value {
+        match v {
+            Value::Object(o) => {
+                let mut keys: Vec<&String> = o.keys().collect();
+                keys.sort();
+                Value::Object(keys.into_iter().map(|k| (k.clone(), sorted(&o[k]))).collect())
+            }
+            Value::Array(a) => Value::Array(a.iter().map(sorted).collect()),
+            x => x.clone(),
+        }
+    }
+    sorted(v).to_string()
+}
+fn sha(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+/// A LINE'S FINGERPRINT, as its mark holds it: the act as signed, and its signature in its standard spelling
+fn line_hash(e: &Value) -> String {
+    let sig = e["sig"]["sig"].as_str().and_then(crate::identity::canonical_sig).unwrap_or_default();
+    sha(&format!("{}\n{sig}", crate::identity::signed_bytes(e)))
+}
+/// THE MARK, before Taldo signs it: which line (its number and fingerprint), when it arrived, who signed it with which key and
+/// whether a person was there — as admission found it — chained to the mark before (`prev`), by which Taldo (`by`)
+fn mark_of(row: &Value, signed: &crate::identity::Signed, prev: &str, by: &str) -> Value {
+    json!({ "g": row["g"], "line": line_hash(row), "arrived": row["arrived"], "signer": signed.signer, "key": signed.key, "present": signed.present, "prev": prev, "by": by })
+}
+/// WHAT TALDO SIGNS OF A MARK: the mark without its signature, in one spelling
+pub fn mark_bytes(mark: &Value) -> String {
+    let mut m = mark.clone();
+    if let Some(o) = m.as_object_mut() {
+        o.remove("sig");
+    }
+    canonical(&m)
+}
+/// a mark's hash, signature and all: what the next mark is chained to
+fn mark_hash(mark: &Value) -> String {
+    sha(&canonical(mark))
 }
 /// WHAT EACH KIND ANSWERS, AND WHOSE ANSWER COUNTS — the one table of it, held at admission, so every answer in the twin is one that
 /// counts: an undo, a carrying out, a taking back and a no answer only what they name; a delete, a grant and a take-over are answered
@@ -463,110 +501,75 @@ impl Twin {
         }
         out
     }
-    /// WHAT A PURGE OF DELETE `d` ERASES: every line at its node and under it whose row is kept — counted, or taken out — but a node's
-    /// coming to be and what decided who may do what (`DECIDING`)
+    /// WHAT A PURGE OF DELETE `d` ERASES: every line at its node and under it — that counts, or was taken out — not erased yet, but a
+    /// node's coming to be and what decided who may do what (`DECIDING`)
     pub fn erasing(&self, d: i64) -> Vec<i64> {
         let Some(e) = self.entries.get(&d) else { return vec![] };
         let under: BTreeSet<String> = self.subtree(&id_of(&e["at"])).into_iter().collect();
         let first: BTreeSet<i64> = under.iter().filter_map(|x| self.nodes.get(x)?.at.front().copied()).collect();
         let counted = under.iter().filter_map(|x| self.nodes.get(x)).flat_map(|n| n.at.iter().copied()).map(|g| (g, self.is(g).to_string()));
-        let taken_out = self.stopped.iter().filter_map(|(g, (_, r))| Some((*g, r.as_ref()?))).filter(|(_, r)| under.contains(&id_of(&r["at"]))).map(|(g, r)| (g, r["is"].as_str().unwrap_or("").to_string()));
-        let mut out: Vec<i64> = counted.chain(taken_out).filter(|(g, is)| !first.contains(g) && !DECIDING.contains(&is.as_str())).map(|(g, _)| g).collect();
-        out.sort();
-        out
+        let out = self.taken_out.iter().filter(|(_, o)| under.contains(&o.at)).map(|(g, o)| (*g, o.is.clone()));
+        let mut gs: Vec<i64> = counted.chain(out).filter(|(g, is)| !first.contains(g) && !self.erased.contains_key(g) && !DECIDING.contains(&is.as_str())).map(|(g, _)| g).collect();
+        gs.sort();
+        gs.dedup();
+        gs
     }
-    /// A LINE WHOSE ROW IS KEPT, counted or taken out
-    fn kept_row(&self, g: i64) -> Option<Arc<Value>> {
-        self.entries.get(&g).or_else(|| self.stopped.get(&g).and_then(|(_, r)| r.clone()))
-    }
-    /// WHAT A PURGE OF DELETE `d` SAYS IT ERASES (`value.lines`): what stays of each line its delete erases — and of one that said who
-    /// a node is, that (`who`), with the line that gave the key it was signed with (`keyed_by`): what it said stands only while that
-    /// line counts
-    pub fn purging(&self, d: i64) -> Vec<Value> {
-        self.erasing(d).into_iter().map(|g| self.erased_stays(&self.kept_row(g).expect("a line erasing names has its row"))).collect()
-    }
-    fn erased_stays(&self, e: &Value) -> Value {
-        let mut s = stays(e);
-        let decided = matches!(e["is"].as_str(), Some("be" | "make"));
-        let who: Map<String, Value> = e["value"].as_object().into_iter().flatten().filter(|(k, _)| decided && GOVERNING.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
-        if !who.is_empty() {
-            s["keyed_by"] = json!(e["sig"]["key"].as_str().and_then(|k| self.keyed_by(k, e["g"].as_i64().unwrap_or(0))));
+    /// THE LINES A TAKE-OUT OR A PURGE NAMES (`value.lines`, their numbers)
+    pub fn lines_named(e: &Value) -> Vec<i64> {
+        if !matches!(e["is"].as_str(), Some("take out" | "purge")) {
+            return vec![];
         }
-        s["who"] = Value::Object(who);
-        s
+        e["value"]["lines"].as_array().into_iter().flatten().filter_map(Value::as_i64).collect()
     }
-    /// THE LINE THAT GAVE KEY `k`, before line `before`: the last that counts saying it among a node's keys (a make, a `be`, a
-    /// take-over — or what stays of an erased one)
-    fn keyed_by(&self, k: &str, before: i64) -> Option<i64> {
-        let says = |v: &Value| v["keys"].as_array().is_some_and(|ks| ks.iter().any(|x| x["key"] == k));
-        let counted = self.entries.having("keys").into_iter().filter(|g| *g < before).filter(|g| self.entries.get(g).is_some_and(|e| says(&e["value"])));
-        let erased = self.landed.iter().copied().filter(|g| *g < before).filter(|g| self.gaps.get(g).is_some_and(|(_, l)| says(&l["who"])));
-        counted.chain(erased).max()
-    }
-    /// WHAT A TAKE-OUT OF THESE LINES SAYS IT TAKES OUT (`value.lines`)
-    pub fn stopping(&self, gs: &[i64]) -> Vec<Value> {
-        gs.iter().map(|g| self.known(*g).map(|l| bare(&l)).expect("a line that counts")).collect()
-    }
-    /// WHAT STAYS OF A LINE THAT COUNTS: of its row, or of what a purge erased (`landed`)
-    fn known(&self, g: i64) -> Option<Value> {
-        if let Some(e) = self.entries.get(&g) {
-            return Some(stays(&e));
+    /// THE ROWS A PURGE HAS ITS KEEPER PUT IN PLACE OF THE ROWS OF THE LINES IT ERASES (`erased_row`), read from the rows — before
+    /// they are kept
+    pub fn erased_rows(&self, purge: &Value) -> Vec<Value> {
+        if purge["is"] != "purge" {
+            return vec![];
         }
-        self.landed.contains(&g).then(|| self.gaps[&g].1.clone())
-    }
-    /// WHETHER LINE `g` COUNTS: taken, or erased with what it said of who a node is landed
-    fn counts(&self, g: i64) -> bool {
-        self.entries.contains_key(&g) || self.landed.contains(&g)
+        let p = purge["g"].as_i64().unwrap_or(-1);
+        let src = self.entries.source();
+        Self::lines_named(purge).into_iter().filter_map(|g| src.and_then(|s| s.entry(g))).map(|r| erased_row(&r, p)).collect()
     }
     /// WHAT THIS TWIN TOOK, KEPT BY ITS KEEPER: from now on read from the rows
     pub fn rows_kept(&mut self) {
         self.entries.rows_kept();
     }
-    /// THIS TWIN MADE AGAIN with `out` taken out and `erased` erased too, by line `by`: every line in its place again, judged as ever
-    fn again(&self, out: &[i64], erased: &[Value], by: i64) -> Twin {
-        let mut t = match self.entries.source() {
-            Some(src) => Twin::stored(src.clone()),
-            None => Twin::default(),
-        };
-        t.stopped = self.stopped.clone();
-        for g in out {
-            t.stopped.insert(*g, (by, self.kept_row(*g)));
+    /// WHETHER LINE `g` IS TAKEN OUT NOW: a take-out names it, and that take-out is not taken out itself
+    fn out_now(&self, g: i64) -> bool {
+        let mut x = g;
+        let mut out = false;
+        while let Some(o) = self.taken_out.get(&x) {
+            out = !out;
+            x = o.by;
         }
-        let mut gaps: BTreeMap<i64, Vec<(i64, Value)>> = self.gaps.iter().map(|(g, c)| (*g, vec![c.clone()])).collect();
-        for l in erased {
-            let g = l["g"].as_i64().expect("a line erased names its number");
-            gaps.insert(g, vec![(by, l.clone())]);
-            // ITS ROW IS FORGOTTEN: nothing it said is held here either
-            if let Some((b, _)) = t.stopped.get(&g).cloned() {
-                t.stopped.insert(g, (b, None));
+        out
+    }
+    /// THIS TWIN AGAIN FROM ITS LINES, each landed as it was taken — none judged again — but what is taken out now (`out_now`), and
+    /// of what a purge erased only what stays of it (`erased_row`): what is, after a take-out or a purge
+    fn replay(&self) -> Twin {
+        let mut t = Twin { entries: self.entries.fresh(), taken_out: self.taken_out.clone(), erased: self.erased.clone(), head: self.head.clone(), rejected: self.rejected.clone(), signatures: self.signatures.clone(), ..Default::default() };
+        let mut lines: BTreeSet<i64> = self.entries.keys().collect();
+        lines.extend(self.taken_out.keys());
+        for g in lines {
+            if t.out_now(g) {
+                continue;
             }
+            let line = match self.entries.get(&g) {
+                Some(l) => l,
+                None => match self.taken_out.get(&g).and_then(|o| o.line.clone()) {
+                    Some(l) => l,
+                    None => Arc::new(self.entries.source().and_then(|s| s.entry(g)).expect("a line taken out is in the rows")),
+                },
+            };
+            let line = match self.erased.get(&g) {
+                Some(p) if line.get("erased_by").is_none() => Arc::new(erased_row(&line, *p)),
+                _ => line,
+            };
+            let arrived = line["arrived"].as_i64().expect("a line taken says when it arrived");
+            t.land_line(&line, self.present.contains(&g), arrived);
         }
-        let mut done = -1;
-        for g in self.entries.keys().collect::<Vec<_>>() {
-            if gaps.contains_key(&g) {
-                t.gaps_before(g + 1, &gaps, &mut done);
-            } else {
-                t.gaps_before(g, &gaps, &mut done);
-                t.apply(&self.e(g));
-                done = done.max(g);
-            }
-        }
-        t.gaps_before(i64::MAX, &gaps, &mut done);
         t
-    }
-    /// THE ROWS A LINE HAS THE STORE FORGET: every line a purge erases — nothing of what they said is kept anywhere after it
-    pub fn forgets(e: &Value) -> Vec<i64> {
-        if e["is"] != "purge" {
-            return vec![];
-        }
-        e["value"]["lines"].as_array().into_iter().flatten().filter_map(|l| l["g"].as_i64()).collect()
-    }
-    /// WHAT A LINE TAKES OUT OR ERASES, as it says it — none for any line but a take-out or a purge
-    fn takes_out(e: &Value) -> Vec<Value> {
-        if !matches!(e["is"].as_str(), Some("take out" | "purge")) {
-            return vec![];
-        }
-        e["value"]["lines"].as_array().cloned().unwrap_or_default()
     }
     /// A PERSON ANSWERING THEIR OWN DELETE OF THEMSELVES — the one thing a deleted node writes: a restore or purge of a delete a person
     /// wrote at themselves, by that person. Nothing deleted answers any other delete, nor a delete of itself by anyone above it
@@ -852,161 +855,108 @@ impl Twin {
     /// ONE ENTRY LANDS, as its row was kept: at its node, by its node, naming what it names, arrived when its row says (`arrived`) —
     /// returns what it touched
     pub fn apply(&mut self, e: &Value) -> BTreeSet<String> {
-        // A LINE TAKEN OUT, OR ERASED, is passed over: it counts for nothing, or what stays of it landed in its place (`gaps_before`)
-        if e["g"].as_i64().is_some_and(|g| self.stopped.contains_key(&g) || self.gaps.contains_key(&g)) {
-            return BTreeSet::new();
-        }
-        // WHEN IT ARRIVED is the receiver's, kept with its row (`arrived`) — never the time its writer wrote in it
+        // WHEN IT ARRIVED is the receiver's — never the time its writer wrote in it
         let Some(arrived) = e["arrived"].as_i64() else {
-            self.rejected.push_back(json!({ "g": e["g"], "why": "its row says no time it arrived" }));
+            self.rejected.push_back(json!({ "g": e["g"], "why": "it says no time it arrived" }));
             return BTreeSet::new();
         };
         self.apply_arrived(e, arrived)
     }
-    /// THE LINES ERASED BEFORE `to`, in their places — each numbered after `done` that a purge claims (the first claim of each): it is
-    /// erased, and counts as what stays of it — who it said a node is — unless it was taken out, or the line that gave the key it was
-    /// signed with does not count. A number at or after `to` waits; `done`, the last number passed, moves on to just before `to` (the
-    /// caller passes the row at `to` itself)
-    fn gaps_before(&mut self, to: i64, claims: &BTreeMap<i64, Vec<(i64, Value)>>, done: &mut i64) {
-        let from = done.saturating_add(1);
-        if to > from {
-            for (g, cs) in claims.range(from..to) {
-                let Some(c) = cs.first() else { continue };
-                self.gaps.insert(*g, c.clone());
-                self.land_gap(*g);
-            }
-        }
-        *done = (*done).max(to.saturating_sub(1));
-    }
-    fn land_gap(&mut self, g: i64) {
-        let l = self.gaps[&g].1.clone();
-        if self.stopped.contains_key(&g) || l["keyed_by"].as_i64().is_some_and(|k| !self.counts(k)) {
-            return;
-        }
-        if let Some(who) = l["who"].as_object().filter(|w| !w.is_empty()) {
-            let at = id_of(&l["at"]);
-            let Some(n) = self.nodes.get_mut(&at) else {
-                self.rejected.push_back(json!({ "g": g, "why": format!("what stays of it says who {at} is, and {at} never was") }));
-                return;
-            };
-            n.who = said_who(std::mem::take(&mut n.who), &json!({ "value": who }));
-        }
-        self.landed.insert(g);
-    }
     /// ONE ENTRY LANDS, arrived at `arrived` (ms, the receiver's clock): taken, or kept among the rejected with why
     pub fn apply_arrived(&mut self, e: &Value, arrived: i64) -> BTreeSet<String> {
         match self.admit(e, arrived) {
-            Ok(signed) => self.land(e, &signed, arrived),
+            Ok(signed) => self.land_line(&kept(e, arrived), signed.present, arrived),
             Err(why) => {
                 self.rejected.push_back(why);
                 BTreeSet::new()
             }
         }
     }
-    /// WHETHER AN ENTRY WOULD BE TAKEN, arrived at `arrived` — every check made before anything changes: taken, with whether a person
-    /// was there, or refused with why (`{ g, why, … }`). The twin is untouched either way: an entry refused leaves no trace, its
-    /// signature included
-    pub fn admit(&self, e: &Value, arrived: i64) -> Result<crate::identity::Signed, Value> {
-        // A LINE THAT TAKES OUT OR ERASES OTHERS — the one rule, when it arrives and in every fold alike: what it names is checked on
-        // the twin as it is at its place, then it is judged on the twin made again without what it names. Whatever stood on that falls
-        // with it — and is named in it too, so no line taken is ever left refused in the rows
-        let lines = Self::takes_out(e);
-        let g = e["g"].as_i64().unwrap_or(i64::MAX);
-        let (out, erased) = match e["is"].as_str() {
-            Some("take out") => (self.take_out_whole(e, &lines).map_err(|why| json!({ "g": e["g"], "why": why }))?, vec![]),
-            Some("purge") => (vec![], self.purge_whole(e, &lines).map_err(|why| json!({ "g": e["g"], "why": why }))?),
-            _ => return self.admit_here(e, arrived),
-        };
-        if out.is_empty() && erased.is_empty() {
-            return self.admit_here(e, arrived);
-        }
-        let w = self.again(&out, &erased, g);
-        let named: BTreeSet<i64> = lines.iter().filter_map(|l| l["g"].as_i64()).collect();
-        let was: BTreeSet<i64> = self.entries.keys().chain(self.landed.iter().copied()).collect();
-        if let Some(x) = was.into_iter().find(|x| !named.contains(x) && !w.counts(*x)) {
-            return Err(json!({ "g": e["g"], "why": format!("#{x} stood on what it takes out, and falls with it: name it too"), "falls": x }));
-        }
-        w.admit_here(e, arrived)
+    /// A LINE TAKEN, AS ITS KEEPER TAKES IT: judged once (`admit`), marked — Taldo's word of what admission found, signed by `sign` as
+    /// the Taldo `marker`, chained to the mark before — and landed. The row to keep, and what admission found; or why not, and this
+    /// twin as it was. A purge's keeper puts `erased_rows` in place of the rows it erases, in the same keep
+    pub fn take(&mut self, e: &Value, arrived: i64, marker: &str, sign: &dyn Fn(&[u8]) -> Result<Value, String>) -> Result<(Value, crate::identity::Signed), Value> {
+        let signed = self.admit(e, arrived)?;
+        let mut row = kept(e, arrived);
+        let mut mark = mark_of(&row, &signed, &self.head, marker);
+        mark["sig"] = sign(mark_bytes(&mark).as_bytes()).map_err(|why| json!({ "g": e["g"], "why": format!("Taldo could not mark it: {why}") }))?;
+        row["mark"] = mark;
+        self.head = mark_hash(&row["mark"]);
+        self.land_line(&row, signed.present, arrived);
+        Ok((row, signed))
     }
-    /// WHAT A TAKE-OUT NAMES, WHOLE: lines before it that count, each once and as it stays (`stopping`) — never a node's coming to be
-    /// (a node is deleted), nor a delete, its answers or another take-out. The lines it takes out now (none it took out already), or
-    /// why not
-    fn take_out_whole(&self, e: &Value, lines: &[Value]) -> Result<Vec<i64>, String> {
-        let g = e["g"].as_i64().ok_or("a line says its number")?;
-        if lines.is_empty() {
-            return Err("a take-out names the lines it takes out (value.lines)".into());
+    /// ONE KEPT ROW READ: its mark checked (`refold`), and the line landed as it was taken — or why the row is not what was kept
+    pub(crate) fn read(&mut self, row: &Value, reading: &mut Reading) -> Result<(), String> {
+        let g = row["g"].as_i64().ok_or_else(|| format!("a row with no number: {row}"))?;
+        let m = &row["mark"];
+        let why = |w: &str| format!("#{g}: {w}");
+        if m["g"] != row["g"] || m["arrived"] != row["arrived"] {
+            return Err(why("its mark is not this line's"));
         }
-        let mut named = vec![];
-        for l in lines {
-            let x = l["g"].as_i64().ok_or("each line taken out is named by its number (g)")?;
-            if named.contains(&x) {
-                return Err(format!("#{x} is named twice"));
+        if m["prev"].as_str() != Some(self.head.as_str()) {
+            return Err(why("its mark is not chained to the mark before it: a row was put in, taken away or changed"));
+        }
+        match row.get("erased_by") {
+            // ERASED: no word to hold to its mark — held to the purge it names, which must erase it
+            Some(p) => {
+                let p = p.as_i64().filter(|p| *p > g).ok_or_else(|| why("it is erased by no purge after it"))?;
+                reading.erased.insert(g, p);
             }
-            if x >= g {
-                return Err(format!("#{x} is not before it"));
+            None => {
+                if m["line"].as_str() != Some(line_hash(row).as_str()) {
+                    return Err(why("it is not the line that was marked"));
+                }
+                let key = m["key"].as_str().unwrap_or("");
+                if !(key.is_empty() && row["sig"].is_null() && g == 0) {
+                    let (k, _) = crate::identity::signer(row).map_err(|w| why(&w))?;
+                    if k != key {
+                        return Err(why("it is signed by another key than its mark says"));
+                    }
+                }
             }
-            // A LINE THIS VERY TAKE-OUT TOOK OUT (the twin made again by it, at its place) is held to it as one that counts is
-            let mine = self.stopped.get(&x).filter(|(by, _)| *by == g);
-            let known = match mine {
-                Some((_, row)) => row.as_ref().map(|r| stays(r)).or_else(|| self.gaps.get(&x).map(|(_, l)| bare(l))),
-                None => self.known(x),
+        }
+        // MARKED BY A TALDO OF THE RECORD'S PERSON, with a key it has as the line arrives — a mark made before that Taldo's node was
+        // (the record's first lines) waits for it
+        reading.early.push(m.clone());
+        self.marks_hold(reading)?;
+        let present = m["present"].as_bool().ok_or_else(|| why("its mark says not whether a person was there"))?;
+        let arrived = row["arrived"].as_i64().ok_or_else(|| why("it says no time it arrived"))?;
+        self.land_line(row, present, arrived);
+        self.head = mark_hash(m);
+        self.marks_hold(reading)?;
+        // A PURGE READ: every line it names is erased, by it — its row holds no word
+        for x in Self::lines_named(row).into_iter().filter(|_| row["is"] == "purge") {
+            reading.erased.remove(&x);
+            let erased = self.entries.source().and_then(|s| s.entry(x)).is_some_and(|r| r["erased_by"] == g);
+            if !erased {
+                return Err(why(&format!("it erases #{x}, whose row still holds its words")));
+            }
+        }
+        Ok(())
+    }
+    /// THE MARKS WAITING, CHECKED where their Taldo's node now is: a node of kind taldo under the record's person, and a key it has
+    fn marks_hold(&self, reading: &mut Reading) -> Result<(), String> {
+        for m in std::mem::take(&mut reading.early) {
+            let by = id_of(&m["by"]);
+            let Some(n) = self.nodes.get(&by) else {
+                reading.early.push(m);
+                continue;
             };
-            let Some(known) = known else { return Err(format!("#{x} is no line that counts")) };
-            if *l != bare(&known) {
-                return Err(format!("what it says stays of #{x} is not #{x}"));
+            if n.kind != "taldo" || n.parent.as_deref().is_none_or(|p| self.parent(p).is_some()) {
+                return Err(format!("#{}'s mark is by {by}, which is not a Taldo of the record's person", m["g"]));
             }
-            let first = self.nodes.get(&id_of(&known["at"])).and_then(|n| n.at.front().copied()) == Some(x);
-            if first || matches!(known["is"].as_str(), Some("delete" | "restore" | "purge" | "take out")) {
-                return Err(format!("#{x} is not taken out: a node is deleted, never its coming to be taken out, and a delete is undone by its restore"));
+            let has = n.who.get("keys").and_then(Value::as_array).into_iter().flatten().any(|k| k["key"] == m["sig"]["key"]);
+            if !has {
+                return Err(format!("#{}'s mark is signed by a key {by} does not have", m["g"]));
             }
-            if mine.is_none() {
-                named.push(x);
-            }
+            crate::identity::holds(mark_bytes(&m).as_bytes(), &m["sig"]).map_err(|w| format!("#{}'s mark: {w}", m["g"]))?;
         }
-        Ok(named)
+        Ok(())
     }
-    /// WHAT A PURGE NAMES, WHOLE: exactly what its delete erases (`erasing`), each once and as it stays (`purging`) — or, in a fold,
-    /// a line no row holds any more that this purge erased, at its delete's node or under it. The lines it erases now, or why not
-    fn purge_whole(&self, e: &Value, lines: &[Value]) -> Result<Vec<Value>, String> {
-        let g = e["g"].as_i64().ok_or("a line says its number")?;
-        let d = e["refs"]["re"].as_i64().ok_or("a purge answers the delete it carries out (refs.re)")?;
-        let under = self.entries.get(&d).filter(|x| x["is"] == "delete").map(|x| id_of(&x["at"])).ok_or_else(|| format!("#{d} is no delete"))?;
-        let want: BTreeSet<i64> = self.erasing(d).into_iter().collect();
-        let (mut fresh, mut named) = (vec![], BTreeSet::new());
-        for l in lines {
-            let x = l["g"].as_i64().ok_or("each line erased is named by its number (g)")?;
-            if !named.insert(x) {
-                return Err(format!("#{x} is named twice"));
-            }
-            if x >= g {
-                return Err(format!("#{x} is not before it"));
-            }
-            match self.gaps.get(&x) {
-                // ERASED BY THIS VERY PURGE, its row forgotten: held to where it was and what it was
-                Some((p, said)) if *p == g && said == l => {
-                    let at = id_of(&l["at"]);
-                    if !self.nodes.contains_key(&at) || !self.within(&at, &under) || DECIDING.contains(&l["is"].as_str().unwrap_or("")) {
-                        return Err(format!("#{x} was not erased by #{d}"));
-                    }
-                }
-                Some(_) => return Err(format!("#{x} was erased already")),
-                None if want.contains(&x) => {
-                    let Some(row) = self.kept_row(x) else { return Err(format!("#{x}'s row is not kept: what it was cannot be held to what the purge says")) };
-                    if *l != self.erased_stays(&row) {
-                        return Err(format!("what it says stays of #{x} is not #{x}"));
-                    }
-                    fresh.push(l.clone());
-                }
-                None => return Err(format!("#{x} is not what #{d} erases")),
-            }
-        }
-        if let Some(x) = want.iter().find(|x| !named.contains(x)) {
-            return Err(format!("the purge does not name #{x}, which it erases"));
-        }
-        Ok(fresh)
-    }
-    /// WHETHER AN ENTRY WOULD BE TAKEN, on this twin as it is — the stopping line's checks of what it names done (`admit`)
-    fn admit_here(&self, e: &Value, arrived: i64) -> Result<crate::identity::Signed, Value> {
+    /// WHETHER AN ENTRY WOULD BE TAKEN, arrived at `arrived` — every check made before anything changes: taken, with who signed it, with
+    /// which key, and whether a person was there, or refused with why (`{ g, why, … }`). The twin is untouched either way: an entry
+    /// refused leaves no trace, its signature included. Judged once: a line taken is never judged again
+    pub fn admit(&self, e: &Value, arrived: i64) -> Result<crate::identity::Signed, Value> {
         // the entry is well formed, at its writer or below (`check`), and from its writer (`identity`) — and taken once
         let signed = match check(e).and_then(|_| crate::identity::verify(self, e, arrived)) {
             Ok(s) => s,
@@ -1024,16 +974,11 @@ impl Twin {
             let taken = match self.entries.source() {
                 None => self.signatures.contains(s),
                 // an overlay's own acts have no rows: it knows their signatures itself
-                Some(src) => {
-                    src.signed(s).is_some_and(|x| Some(x) != e["g"].as_i64() && self.entries.contains_key(&x))
-                        || self.signatures.contains(s)
-                }
+                // every row kept is a line taken — counted, taken out, or erased (its signature stays): none is taken again
+                Some(src) => src.signed(s).is_some_and(|x| Some(x) != e["g"].as_i64()) || self.signatures.contains(s),
             };
             if taken {
                 return Err(json!({ "g": e["g"], "why": "this signed act was already taken" }));
-            }
-            if self.erased.contains(s) {
-                return Err(json!({ "g": e["g"], "why": "this act was erased: it is never taken again" }));
             }
         }
         // A MOVE A PERSON MUST MAKE: work settling an open ask whose flow says a person must be there is taken only signed with one
@@ -1108,6 +1053,12 @@ impl Twin {
                     if arrived < due {
                         return Err(json!({ "g": e["g"], "why": format!("the deletion of {at} waits until {due}") }));
                     }
+                    // IT NAMES EXACTLY WHAT ITS DELETE ERASES (`erasing`), so its keeper erases exactly that
+                    let named: BTreeSet<i64> = Self::lines_named(e).into_iter().collect();
+                    let want: BTreeSet<i64> = self.erasing(d).into_iter().collect();
+                    if named.len() != Self::lines_named(e).len() || named != want {
+                        return Err(json!({ "g": e["g"], "why": format!("a purge names exactly what its delete erases: {want:?}") }));
+                    }
                 }
             }
             _ => {
@@ -1121,12 +1072,27 @@ impl Twin {
         // A TAKE-OUT takes out lines at its node or under it, each written by its own writer or a node under it — set from above that
         // node (`may_decide`): nothing is taken out by a node beside or under whoever wrote it
         if e["is"] == "take out" {
-            let lines = Self::takes_out(e);
-            if let Some(l) = lines.iter().find(|l| !self.within(&id_of(&l["at"]), &at)) {
-                return Err(json!({ "g": e["g"], "why": format!("#{} is not at {at} or under it", l["g"]) }));
+            let g = e["g"].as_i64().expect("check: an entry has its number");
+            let lines = Self::lines_named(e);
+            if lines.is_empty() || lines.len() != lines.iter().collect::<BTreeSet<_>>().len() {
+                return Err(json!({ "g": e["g"], "why": "a take-out names the lines it takes out, each once (value.lines)" }));
             }
-            if let Some(l) = lines.iter().find(|l| !self.within(&id_of(&l["by"]), &by)) {
-                return Err(json!({ "g": e["g"], "why": format!("#{} was written by {}: only it, or a node above it, takes it out", l["g"], id_of(&l["by"])) }));
+            for x in lines {
+                // a line that counts, before it — never a node's coming to be (a node is deleted), a delete or its undo (a delete is
+                // undone by its restore), nor a purge (what the law erased stays erased)
+                let Some(l) = (x < g).then(|| self.entries.get(&x)).flatten().filter(|_| !self.erased.contains_key(&x)) else {
+                    return Err(json!({ "g": e["g"], "why": format!("#{x} is no line before it that counts") }));
+                };
+                let first = self.nodes.get(&id_of(&l["at"])).and_then(|n| n.at.front().copied()) == Some(x);
+                if first || matches!(l["is"].as_str(), Some("delete" | "restore" | "purge")) {
+                    return Err(json!({ "g": e["g"], "why": format!("#{x} is not taken out: a node is deleted, a delete restored, and a purge stands") }));
+                }
+                if !self.within(&id_of(&l["at"]), &at) {
+                    return Err(json!({ "g": e["g"], "why": format!("#{x} is not at {at} or under it") }));
+                }
+                if !self.within(&id_of(&l["by"]), &by) {
+                    return Err(json!({ "g": e["g"], "why": format!("#{x} was written by {}: only it, or a node above it, takes it out", id_of(&l["by"])) }));
+                }
             }
         }
         // BLOCKED OR DELETED, NOTHING IS WRITTEN AS IT — but, by whoever deleted, the delete's own undo or carrying out. Who signs for a
@@ -1149,12 +1115,10 @@ impl Twin {
             return Err(json!({ "g": e["g"], "why": format!("{x} was never made") }));
         }
         // AN ANSWER ANSWERS WHAT IT NAMES IN `re`: an entry before it, of the kind it answers
-        // AN ANSWER TO A LINE TAKEN OUT: one written before a purge erased what it answered stands — what it answered is gone, never
-        // what it said of it; anything answering a line stopped, or answering what was erased after it was, is not taken
-        let erased_before = |re: i64| !self.stopped.contains_key(&re) && self.gaps.get(&re).is_some_and(|(p, _)| e["g"].as_i64().is_some_and(|g| g < *p));
-        if let Some(re) = e["refs"]["re"].as_i64().filter(|re| !erased_before(*re)) {
-            if self.stopped.contains_key(&re) {
-                return Err(json!({ "g": e["g"], "why": format!("it answers #{re}, which was taken out") }));
+        // nothing answers what was erased: its words are gone
+        if let Some(re) = e["refs"]["re"].as_i64() {
+            if self.erased.contains_key(&re) {
+                return Err(json!({ "g": e["g"], "why": format!("it answers #{re}, which was erased") }));
             }
             let Some(x) = (re < e["g"].as_i64().expect("check: an entry has its number")).then(|| self.entries.get(&re)).flatten() else {
                 return Err(json!({ "g": e["g"], "why": format!("it answers #{re}, which is no entry before it") }));
@@ -1295,25 +1259,32 @@ impl Twin {
     }
     /// AN ENTRY ADMITTED LANDS, arrived at `arrived`: at its node, by its node, naming what it names — returns what it touched. Only
     /// after `admit` took it
-    pub fn land(&mut self, e: &Value, signed: &crate::identity::Signed, arrived: i64) -> BTreeSet<String> {
-        let present = signed.present;
+    fn land_line(&mut self, e: &Value, present: bool, arrived: i64) -> BTreeSet<String> {
         let e = &kept(e, arrived);
         let mut touched = BTreeSet::new();
-        // A LINE THAT TAKES OUT OR ERASES OTHERS: the twin is made again without them — every detail, hold and answer they gave, and
-        // whatever stood on them, goes with them — then it lands on that. In a fold, what a purge erased is erased already
-        let g = e["g"].as_i64().unwrap();
-        let lines = Self::takes_out(e);
-        let (out, erased): (Vec<i64>, Vec<Value>) = match e["is"].as_str() {
-            Some("take out") => (lines.iter().filter_map(|l| l["g"].as_i64()).collect(), vec![]),
-            Some("purge") => (vec![], lines.iter().filter(|l| l["g"].as_i64().is_some_and(|x| !self.gaps.contains_key(&x))).cloned().collect()),
-            _ => (vec![], vec![]),
+        let g = e["g"].as_i64().expect("an entry has its number");
+        // A TAKE-OUT OR A PURGE, NEW: from here, what it names has no effect, or only what stays of it — the twin is made again from
+        // its lines without that (`replay`), none judged again; then it lands on that. Made again, it finds what it names done
+        let named = Self::lines_named(e);
+        let new: Vec<i64> = match e["is"].as_str() {
+            Some("take out") => named.iter().copied().filter(|x| self.taken_out.get(x).is_none_or(|o| o.by != g)).collect(),
+            Some("purge") => named.iter().copied().filter(|x| !self.erased.contains_key(x)).collect(),
+            _ => vec![],
         };
-        if !out.is_empty() || !erased.is_empty() {
-            let again = self.again(&out, &erased, g);
-            touched.extend(lines.iter().map(|l| id_of(&l["at"])).filter(|x| again.nodes.contains_key(x)));
+        if !new.is_empty() {
+            for x in &new {
+                if e["is"] == "purge" {
+                    self.erased.insert(*x, g);
+                    continue;
+                }
+                let line = self.entries.get(x).expect("a line taken out was taken");
+                let held = self.entries.source().is_none().then(|| line.clone());
+                self.taken_out.insert(*x, Out { by: g, at: id_of(&line["at"]), writer: id_of(&line["by"]), is: line["is"].as_str().unwrap_or("").to_string(), line: held });
+            }
+            let again = self.replay();
+            touched.extend(new.iter().filter_map(|x| self.entries.get(x).map(|l| id_of(&l["at"]))).filter(|x| again.nodes.contains_key(x)));
             *self = again;
         }
-        self.erased.extend(Self::takes_out(e).iter().filter_map(|l| l["sig"].as_str()).filter_map(crate::identity::canonical_sig));
         if self.entries.source().is_none() || self.entries.is_overlay() {
             if let Some(s) = e["sig"]["sig"].as_str().and_then(crate::identity::canonical_sig) {
                 self.signatures.insert(s);

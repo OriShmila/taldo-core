@@ -97,3 +97,34 @@ pub fn invite(g: i64, by: &str, comes: &str) -> Value {
 pub fn joins(g: i64, person: &str, invite: i64) -> Value {
     signed(json!({ "g": g, "ts": g, "by": person, "at": person, "is": "be", "refs": { "re": invite }, "value": { "keys": [{ "key": public(person) }] } }))
 }
+
+/// THE TEST WORLDS' TALDO: a node of kind taldo under a person, whose key marks every line its keeper keeps
+pub const TALDO: &str = "Taldo";
+/// Taldo made under `person`, its key its own
+pub fn taldo(g: i64, person: &str) -> Value {
+    act(g, person, TALDO, "make", json!({ "in": person }), json!({ "kind": "taldo", "keys": [{ "key": public(TALDO) }] }))
+}
+/// what Taldo's key signs, as Keys signs it
+pub fn mark_sign(bytes: &[u8]) -> Result<Value, String> {
+    let s: Signature = key_of(TALDO).sign(bytes);
+    Ok(json!({ "key": public(TALDO), "sig": s.to_bytes().iter().map(|x| format!("{x:02x}")).collect::<String>() }))
+}
+/// AS THE KEEPER: a line taken — judged, marked, landed — and kept as one with what a purge erases and the state after
+pub fn keep(store: &taldo_core::fakes::FakeStore, t: &mut taldo_core::twin::Twin, mut e: Value) -> Result<(), Value> {
+    use taldo_core::seams::Store;
+    arrives(&mut e);
+    let a = e["arrived"].as_i64().unwrap();
+    let erased = t.erased_rows(&e);
+    let mut next = t.clone();
+    let (row, _) = next.take(&e, a, TALDO, &mark_sign)?;
+    store.keep("k", &[row], &erased, &next.snapshot()).unwrap();
+    next.rows_kept();
+    *t = next;
+    Ok(())
+}
+/// a store, its lease taken by the keeper
+pub fn store() -> std::sync::Arc<taldo_core::fakes::FakeStore> {
+    let s = std::sync::Arc::new(taldo_core::fakes::FakeStore::default());
+    taldo_core::seams::Store::lease(&*s, "k").unwrap();
+    s
+}
