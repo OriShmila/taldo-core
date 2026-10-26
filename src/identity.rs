@@ -185,6 +185,11 @@ pub fn keys_for(t: &Twin, by: &str, arrived: i64) -> Vec<(String, bool)> {
 fn signers(t: &Twin, by: &str, arrived: i64, undo: bool) -> Vec<(String, bool, String)> {
     signing_nodes(t, by, undo).iter().flat_map(|x| own_keys(t, x, arrived)).collect()
 }
+/// THE RECORD'S UNSIGNED BEGINNING — the one line nobody vouches for: a person's first key, saying who they are, unsigned, while
+/// nothing is in the record yet. The one answer to it, when a line arrives and when a kept row is read
+pub fn unsigned_beginning(t: &Twin, e: &Value) -> bool {
+    t.nodes.is_empty() && e["sig"].is_null() && e["is"] == "be" && e["by"] == e["at"] && parse_id(&e["by"]).is_some() && e["value"]["keys"].is_array()
+}
 /// IDENTITY: the entry is from its node — or why not; and whether a person was there when it was signed
 pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<Signed, String> {
     let by = parse_id(&e["by"]).ok_or("by is not a node")?;
@@ -202,7 +207,7 @@ pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<Signed, String> {
         && e["is"] == "be"
         && e["value"]["keys"].is_array()
         && keys.is_empty();
-    if first && e["sig"].is_null() && t.nodes.is_empty() {
+    if unsigned_beginning(t, e) {
         return Ok(Signed { signer: by, key: String::new(), present: false });
     }
     // HELD BY ITS SIGNATURE AND A HASH OF WHAT WAS SIGNED — never the words themselves: what a purge erased is held nowhere

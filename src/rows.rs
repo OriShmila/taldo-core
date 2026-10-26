@@ -24,6 +24,31 @@ pub trait Source: Send + Sync {
     }
 }
 
+/// ONE JSON VALUE IN ONE SPELLING: every object's keys in order
+pub(crate) fn canonical(v: &Value) -> String {
+    fn sorted(v: &Value) -> Value {
+        match v {
+            Value::Object(o) => {
+                let mut keys: Vec<&String> = o.keys().collect();
+                keys.sort();
+                Value::Object(keys.into_iter().map(|k| (k.clone(), sorted(&o[k]))).collect())
+            }
+            Value::Array(a) => Value::Array(a.iter().map(sorted).collect()),
+            x => x.clone(),
+        }
+    }
+    sorted(v).to_string()
+}
+/// one JSON value in one spelling, as Taldo signs it (a mark, an anchor)
+pub fn canonical_of(v: &Value) -> String {
+    canonical(v)
+}
+/// A ROW'S HASH, every byte of it in one spelling: what the twin holds of each row it read, so a row read again is the row read
+pub fn row_hash(v: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(canonical(v).as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// how many entries read from rows are kept at hand
 const AT_HAND: usize = 4096;
 /// how many rows are read at once when the entries are walked
@@ -78,6 +103,8 @@ pub struct Entries {
     /// AN OVERLAY'S: its own entries have no rows — they are numbered above every row it was made on (`rows_to`), kept in memory
     overlay: bool,
     rows_to: i64,
+    /// EACH ROW'S HASH, as the twin took or read it: a row read again from the source is that row, or the record is not read on
+    hashes: OrdMap<i64, String>,
 }
 impl Default for Entries {
     fn default() -> Self {
@@ -95,6 +122,7 @@ impl Default for Entries {
             top: 0,
             overlay: false,
             rows_to: 0,
+            hashes: OrdMap::new(),
         }
     }
 }
@@ -114,6 +142,7 @@ impl Clone for Entries {
             top: self.top,
             overlay: self.overlay,
             rows_to: self.rows_to,
+            hashes: self.hashes.clone(),
         }
     }
 }
@@ -209,6 +238,9 @@ impl Entries {
             }
         }
         assert!(!self.overlay || self.source.is_none() || g > self.rows_to, "an overlay's entry {g} is not above the rows it was made on ({})", self.rows_to);
+        if self.source.is_some() {
+            self.hashes.insert(g, row_hash(e));
+        }
         let v = Arc::new(e.clone());
         if self.in_rows(g) {
             self.pending.insert(g, v);
@@ -294,12 +326,26 @@ impl Entries {
         if let Some(v) = self.hand.lock().unwrap_or_else(|x| x.into_inner()).get(*g) {
             return Some(v);
         }
-        let v = Arc::new(src.entry(*g)?);
+        let v = Arc::new(self.held(*g, src.entry(*g)?));
         self.hand
             .lock()
             .unwrap_or_else(|x| x.into_inner())
             .put(*g, v.clone());
         Some(v)
+    }
+    /// A ROW READ AGAIN FROM THE SOURCE, held to the row the twin took or read: the same, or nothing runs on
+    fn held(&self, g: i64, row: Value) -> Value {
+        if let Some(h) = self.hashes.get(&g) {
+            assert!(*h == row_hash(&row), "row {g} of the record is not the row Taldo read: it was changed in the store");
+        }
+        row
+    }
+    /// each row's hash, as the twin took or read it (for a snapshot)
+    pub(crate) fn hashes(&self) -> &OrdMap<i64, String> {
+        &self.hashes
+    }
+    pub(crate) fn set_hashes(&mut self, h: OrdMap<i64, String>) {
+        self.hashes = h;
     }
     pub fn len(&self) -> usize {
         self.count
@@ -394,7 +440,7 @@ impl Iter<'_> {
                 (None, _) => (lo, hi),
             };
             // AS `get` READS THEM: an entry taken and not kept yet from its own home first, else its row
-            let mut span: BTreeMap<i64, Arc<Value>> = rows.into_iter().map(|(g, v)| (g, Arc::new(v))).collect();
+            let mut span: BTreeMap<i64, Arc<Value>> = rows.into_iter().filter(|(g, _)| es.contains_key(g)).map(|(g, v)| (g, Arc::new(es.held(g, v)))).collect();
             span.extend(es.pending.range(from..=to).map(|(g, v)| (*g, v.clone())));
             let mut out: Vec<(i64, Arc<Value>)> = span.into_iter().filter(|(g, _)| es.contains_key(g)).collect();
             if newest_first {

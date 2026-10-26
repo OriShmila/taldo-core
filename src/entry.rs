@@ -3,7 +3,7 @@
 //!
 //! ENTRY  { g, ts, by: <id>, at: <id>, is: <kind>, refs?: { <role>: <id> | [<id>…] | <entry's number> }, value? }
 //! A role is an edge from `at` to each node it names, readable both ways — only a mention: it never opens the node on the other side.
-//! What a kind or a role means is not the kernel's.
+//! What a kind means is not the kernel's; the roles are the record's own (`ROLES`).
 use serde_json::Value;
 
 /// an id: a non-empty name, the same however it is spaced
@@ -19,8 +19,14 @@ pub fn ids_of(v: &Value) -> Vec<String> {
     }
 }
 
-/// AN ENTRY IS WELL FORMED when it has its g, `by` and `at` are ids, it says what it is (`is`), and every role names an id, a list
-/// of ids, or the number of another entry — or why not. Where it may land is the twin's to say: it knows the graph
+/// THE ROLES A LINE NAMES THINGS BY — the one list of them: what it answers (`re`), what a node is made in (`in`), what an act is on
+/// (`on`), what an ask is about (`about`), the kind a node is let in as (`as`), the way back a take-over proves (`proof`). A role is a
+/// word of the record's own, never the writer's: no word a writer chose stays in what a purge leaves
+pub const ROLES: [&str; 6] = ["re", "in", "on", "about", "as", "proof"];
+
+/// AN ENTRY IS WELL FORMED when it has its g, `by` and `at` are ids, it says what it is (`is`), and every role is one of the record's
+/// (`ROLES`) and names an id, a list of ids, or the number of another entry — or why not. Where it may land is the twin's to say: it
+/// knows the graph
 pub fn check(e: &Value) -> Result<(), String> {
     if e["g"].as_i64().is_none() {
         return Err("no g".into());
@@ -36,6 +42,9 @@ pub fn check(e: &Value) -> Result<(), String> {
     }
     if let Some(refs) = e["refs"].as_object() {
         for (role, v) in refs {
+            if !ROLES.contains(&role.as_str()) {
+                return Err(format!("refs.{role} is no role of the record's: a line names things by {}", ROLES.join(", ")));
+            }
             let ok = match v {
                 Value::Number(n) => n.is_i64(),
                 Value::Array(a) => a.iter().all(|x| parse_id(x).is_some()),

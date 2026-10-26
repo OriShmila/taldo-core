@@ -134,7 +134,7 @@ fn a_setup_grant_reaches_below_their_org_only_while_it_lasts() {
 #[test]
 fn running_something_gives_no_reach_into_it() {
     let t = with(&[
-        act(20, "servers", "servers", "run", json!({ "runs": "taxtaldo" }), json!({})),
+        act(20, "servers", "servers", "run", json!({ "about": "taxtaldo" }), json!({})),
         act(21, "servers", "servers", "read", json!({ "on": "taxtaldo" }), json!({})),
         act(22, "servers", "taxtaldo", "be", json!({}), json!({ "planted": true })),
     ]);
@@ -142,7 +142,7 @@ fn running_something_gives_no_reach_into_it() {
     assert!(!taken(&t, 21), "running their Taldo let the servers read it");
     assert!(!taken(&t, 22), "running their Taldo let the servers write in it");
     // a mention back up the chain (the form mentions Dana) is only a mention: levels stay
-    let t = with(&[act(23, "taxorg", "form", "be", json!({ "mentions": "dana" }), json!({}))]);
+    let t = with(&[act(23, "taxorg", "form", "be", json!({ "about": "dana" }), json!({}))]);
     assert!(taken(&t, 23), "{}", why(&t, 23));
     assert_eq!(t.level("form"), Some(4));
 }

@@ -95,7 +95,13 @@ impl crate::rows::Source for FakeStore {
     }
     fn signed(&self, sig: &str) -> Option<i64> {
         // found by the standard spelling of each kept entry's signature, as every source finds it
-        self.rows.lock().unwrap().iter().find(|(_, v)| v["sig"]["sig"].as_str().and_then(crate::identity::canonical_sig).as_deref() == Some(sig)).map(|(g, _)| *g)
+        self.rows.lock().unwrap().iter().find(|(_, v)| crate::twin::signed_as(v).as_deref() == Some(sig)).map(|(g, _)| *g)
+    }
+}
+impl FakeStore {
+    /// A ROW PUT IN BY HAND, as someone with the store's file could: what a twin must never read as its own
+    pub fn put_row(&self, row: serde_json::Value) {
+        self.rows.lock().unwrap().insert(row["g"].as_i64().expect("a row with its number"), row);
     }
 }
 impl Store for FakeStore {
@@ -292,6 +298,7 @@ impl NetIn for FakeNetIn {
 pub struct FakeKeys {
     keys: Mutex<BTreeMap<String, p256::ecdsa::SigningKey>>,
     pub(crate) secrets: Mutex<BTreeMap<String, Vec<u8>>>,
+    anchors: Mutex<BTreeMap<String, Vec<u8>>>,
 }
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
@@ -321,6 +328,13 @@ impl Keys for FakeKeys {
     fn keep_secret(&self, name: &str, secret: &[u8]) -> Answer<()> {
         self.secrets.lock().unwrap().insert(name.to_string(), secret.to_vec());
         done(())
+    }
+    fn keep_anchor(&self, slot: &str, anchor: &[u8]) -> Answer<()> {
+        self.anchors.lock().unwrap().insert(slot.to_string(), anchor.to_vec());
+        done(())
+    }
+    fn anchor(&self, slot: &str) -> Answer<Option<Vec<u8>>> {
+        done(self.anchors.lock().unwrap().get(slot).cloned())
     }
     fn has_secret(&self, name: &str) -> Answer<bool> {
         done(self.secrets.lock().unwrap().contains_key(name))

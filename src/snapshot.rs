@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 use imbl::{OrdMap, Vector};
 use std::sync::Arc;
 
-const MAGIC: &[u8] = b"taldo twin state 13\n";
+const MAGIC: &[u8] = b"taldo twin state 14\n";
 
 struct W(Vec<u8>);
 impl W {
@@ -161,10 +161,11 @@ impl Twin {
         w.u(self.taken_out.len() as u64);
         for (g, o) in &self.taken_out {
             w.i(*g);
-            w.i(o.by);
+            w.gs(o.by.iter());
             w.s(&o.at);
             w.s(&o.writer);
             w.s(&o.is);
+            w.s(&o.hash);
         }
         w.u(self.erased.len() as u64);
         for (g, p) in &self.erased {
@@ -172,6 +173,13 @@ impl Twin {
             w.i(*p);
         }
         w.s(&self.head);
+        w.i(self.last);
+        let hashes = self.entries.hashes();
+        w.u(hashes.len() as u64);
+        for (g, h) in hashes {
+            w.i(*g);
+            w.s(h);
+        }
         let (names, kinds) = self.entries.kinds();
         w.u(names.len() as u64);
         for n in names {
@@ -273,14 +281,20 @@ impl Twin {
         // the last mark's hash
         for _ in 0..r.n()? {
             let g = r.i()?;
-            let by = r.i()?;
-            t.taken_out.insert(g, crate::twin::Out { by, at: r.s()?, writer: r.s()?, is: r.s()?, line: None });
+            let by = r.gs()?;
+            t.taken_out.insert(g, crate::twin::Out { by, at: r.s()?, writer: r.s()?, is: r.s()?, hash: r.s()?, line: None });
         }
         for _ in 0..r.n()? {
             let g = r.i()?;
             t.erased.insert(g, r.i()?);
         }
         t.head = r.s()?;
+        t.last = r.i()?;
+        let mut hashes = OrdMap::new();
+        for _ in 0..r.n()? {
+            let g = r.i()?;
+            hashes.insert(g, r.s()?);
+        }
         let names: Vec<String> = (0..r.n()?).map(|_| r.s()).collect::<Result<_, _>>()?;
         let len = r.n()?;
         let mut kinds: Vec<u32> = Vec::with_capacity(len.min(1 << 26));
@@ -302,6 +316,7 @@ impl Twin {
         }
         t.entries = Entries::restored(source.clone(), names, kinds);
         t.entries.set_indexes(with);
+        t.entries.set_hashes(hashes);
         // ROWS KEPT AFTER THE STATE: every one read on it as any row is (`Twin::read`), so a state behind its rows never reads the
         // record short
         let last = t.entries.top().max(t.taken_out.keys().next_back().copied().unwrap_or(0));

@@ -126,7 +126,7 @@ fn an_answer_counts_only_through_its_re_to_what_exists_of_its_kind() {
     let d1 = act(11, ORI, ENGINE, "delete", json!({}), json!({}));
     let d2 = act(12, ORI, BESIDE, "delete", json!({}), json!({}));
     // a restore of one delete carrying the other's number elsewhere restores only the one it answers
-    let r = act(13, ORI, ENGINE, "restore", json!({ "re": 11, "also": 12 }), json!({}));
+    let r = act(13, ORI, ENGINE, "restore", json!({ "re": 11, "on": 12 }), json!({}));
     let t = with(&[keep.clone(), d1.clone(), d2.clone(), r]);
     assert!(t.rejected.is_empty(), "{:?}", t.rejected);
     assert!(!t.deleted(ENGINE) && t.deleted(BESIDE), "a number beside its re answered another delete");
@@ -734,7 +734,7 @@ fn a_mark_is_checked_against_the_key_its_taldo_had_when_it_was_made() {
         arrives(&mut e);
         let a = e["arrived"].as_i64().unwrap();
         let made = t.entries.top();
-        let (row, _) = if made >= 3 { t.take(&e, a, common::TALDO, made, &sign2) } else { t.take(&e, a, common::TALDO, made, &mark_sign) }.unwrap();
+        let row = if made >= 3 { t.take(&e, a, common::TALDO, made, &sign2) } else { t.take(&e, a, common::TALDO, made, &mark_sign) }.unwrap().row;
         taldo_core::seams::Store::keep(&*kept, "k", &[row], &[], b"").unwrap();
     }
     Twin::refold(kept.clone()).unwrap_or_else(|w| panic!("a record whose Taldo's key changed does not read: {w}"));
@@ -744,7 +744,7 @@ fn a_mark_is_checked_against_the_key_its_taldo_had_when_it_was_made() {
     for e in lines.iter().cloned() {
         let mut e = e;
         arrives(&mut e);
-        let (row, _) = t.take(&e, e["arrived"].as_i64().unwrap(), common::TALDO, 4, &sign2).unwrap();
+        let row = t.take(&e, e["arrived"].as_i64().unwrap(), common::TALDO, 4, &sign2).unwrap().row;
         taldo_core::seams::Store::keep(&*once, "k", &[row], &[], b"").unwrap();
     }
     Twin::refold(once).unwrap_or_else(|w| panic!("a record marked once at its end does not read: {w}"));
@@ -755,8 +755,119 @@ fn a_mark_is_checked_against_the_key_its_taldo_had_when_it_was_made() {
         let mut e = e;
         arrives(&mut e);
         let made = t.entries.top();
-        let (row, _) = t.take(&e, e["arrived"].as_i64().unwrap(), common::TALDO, made, &mark_sign).unwrap();
+        let row = t.take(&e, e["arrived"].as_i64().unwrap(), common::TALDO, made, &mark_sign).unwrap().row;
         taldo_core::seams::Store::keep(&*late, "k", &[row], &[], b"").unwrap();
     }
     assert!(Twin::refold(late).is_err(), "a mark by Taldo's old key, made after the key changed, was read");
+}
+
+// ─── THE NINTH REVIEW'S PROBES (27 Oct): one unsigned beginning; the record anchored outside its store, every row read again held to
+// what was read; what stays of an erased line bound by its purge's mark; one Taldo marks the record; a line taken out by many ───
+
+fn kept_record(lines: Vec<Value>) -> (std::sync::Arc<taldo_core::fakes::FakeStore>, Twin) {
+    let store = store();
+    let mut t = Twin::stored(store.clone());
+    for e in lines {
+        keep(&store, &mut t, e).unwrap_or_else(|w| panic!("{w}"));
+    }
+    (store, t)
+}
+fn state_of(store: &taldo_core::fakes::FakeStore) -> Vec<u8> {
+    taldo_core::seams::Store::state(store).unwrap().value.unwrap_or_default()
+}
+
+#[test]
+fn a_record_begun_at_any_number_reads_again() {
+    let mut first = first_key(ORI);
+    first["g"] = json!(1);
+    let (store, _) = kept_record(vec![first, taldo(2, ORI), act(3, ORI, ORI, "be", json!({}), json!({ "name": "Ori" }))]);
+    Twin::refold(store).unwrap_or_else(|w| panic!("a record begun at 1 does not read: {w}"));
+}
+
+#[test]
+fn the_record_is_read_only_where_taldo_last_left_it() {
+    let (store, t) = kept_record(vec![first_key(ORI), taldo(1, ORI), make(2, ORI, "D", ORI, "device"), act(3, ORI, ORI, "grant", json!({}), json!({ "action": "read", "to": "D" })), act(4, ORI, "D", "block", json!({}), json!({}))]);
+    let anchor = anchor_of(&t, &state_of(&store));
+    let again = Twin::refold(store.clone()).unwrap();
+    again.anchored(&state_of(&store), &anchor).unwrap_or_else(|w| panic!("{w}"));
+    // CUT SHORT: the block taken away
+    let rows: Vec<Value> = taldo_core::rows::Source::page(&*store, 0, i64::MAX, false, 100).into_iter().map(|(_, e)| e).collect();
+    let short = store_of(&rows[..4]);
+    let cut = Twin::refold(short.clone()).unwrap();
+    assert!(cut.anchored(&state_of(&store), &anchor).is_err(), "a record cut short was read as where Taldo left it");
+    // THE STATE CHANGED
+    let mut changed = state_of(&store);
+    let last = changed.len() - 1;
+    changed[last] ^= 1;
+    assert!(again.anchored(&changed, &anchor).is_err(), "a changed state was read as Taldo's");
+    // AN ANCHOR SIGNED BY ANOTHER KEY
+    let mut forged = t.anchor(&state_of(&store));
+    forged["sig"] = {
+        use p256::ecdsa::signature::Signer;
+        let s: p256::ecdsa::Signature = key_of("thief").sign(taldo_core::rows::canonical_of(&forged).as_bytes());
+        json!({ "key": public("thief"), "sig": s.to_bytes().iter().map(|x| format!("{x:02x}")).collect::<String>() })
+    };
+    assert!(again.anchored(&state_of(&store), &forged).is_err(), "an anchor by a key that does not mark the record was taken");
+}
+
+#[test]
+fn a_row_changed_after_it_was_read_is_never_read() {
+    let (store, _) = kept_record(vec![first_key(ORI), taldo(1, ORI), make(2, ORI, "P", ORI, "thing"), act(3, ORI, "P", "be", json!({}), json!({ "name": "Pat" }))]);
+    let t = Twin::refold(store.clone()).unwrap();
+    let mut row = taldo_core::rows::Source::entry(&*store, 3).unwrap();
+    row["value"]["name"] = json!("Mallory");
+    store.put_row(row);
+    let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| t.entry(3)["value"]["name"].clone()));
+    assert!(read.is_err(), "a row changed in the store after it was read was read");
+}
+
+#[test]
+fn what_stays_of_an_erased_line_is_bound_by_its_purge() {
+    let (store, mut t) = kept_record(vec![first_key(ORI), act(1, ORI, ORI, "be", json!({}), json!({ "keep_deleted": 10 })), taldo(2, ORI), make(3, ORI, "P", ORI, "thing"), act(4, ORI, "P", "say", json!({}), json!({ "says": "a secret" })), act(5, ORI, "P", "delete", json!({}), json!({}))]);
+    let mut purge = act(6, ORI, "P", "purge", json!({ "re": 5 }), json!({ "lines": [4] }));
+    purge["arrived"] = json!(100);
+    keep(&store, &mut t, purge).unwrap();
+    let stays = taldo_core::rows::Source::entry(&*store, 4).unwrap();
+    assert!(stays.get("salt").is_none() && stays["sig"].is_null() && stays["sig_hash"].is_string() && stays["value"] == json!({}), "what stays of #4 holds more than it may: {stays}");
+    Twin::refold(store.clone()).unwrap();
+    // turned into a block of Taldo
+    let rows: Vec<Value> = taldo_core::rows::Source::page(&*store, 0, i64::MAX, false, 100).into_iter().map(|(_, e)| e).collect();
+    let mut made = rows.clone();
+    made[4]["is"] = json!("block");
+    made[4]["at"] = json!(TALDO);
+    assert!(Twin::refold(store_of(&made)).is_err(), "what stays of an erased line was made into another act");
+}
+
+#[test]
+fn only_the_records_taldo_marks_it_and_never_while_blocked() {
+    // another person's node of kind taldo marks a line in Ori's record
+    let (store, _) = kept_record(vec![first_key(ORI), taldo(1, ORI), act(2, ORI, ORI, "grant", json!({}), json!({ "action": "join", "as": "Eve" }))]);
+    let mut rows: Vec<Value> = taldo_core::rows::Source::page(&*store, 0, i64::MAX, false, 100).into_iter().map(|(_, e)| e).collect();
+    let mut m = rows[2]["mark"].clone();
+    m["by"] = json!("Eve › T");
+    rows[2]["mark"] = m;
+    assert!(Twin::refold(store_of(&rows)).is_err(), "a mark by a Taldo not the record's was read");
+    // after Taldo is blocked, nothing it marks is read
+    let (store, _) = kept_record(vec![first_key(ORI), taldo(1, ORI), act(2, ORI, TALDO_NODE, "block", json!({}), json!({})), act(3, ORI, ORI, "be", json!({}), json!({ "name": "after the block" }))]);
+    assert!(Twin::refold(store).is_err(), "a line marked by a blocked Taldo was read");
+}
+const TALDO_NODE: &str = common::TALDO;
+
+#[test]
+fn a_line_taken_out_by_many_is_out_while_any_counts() {
+    let lines = vec![
+        first_key(ORI),
+        taldo(1, ORI),
+        act(2, ORI, ORI, "be", json!({}), json!({ "name": "x" })),
+        act(3, ORI, ORI, "take out", json!({}), json!({ "lines": [2] })),
+        act(4, ORI, ORI, "take out", json!({}), json!({ "lines": [3] })),
+        act(5, ORI, ORI, "take out", json!({}), json!({ "lines": [2] })),
+        act(6, ORI, ORI, "take out", json!({}), json!({ "lines": [4] })),
+    ];
+    let t = fold(&lines);
+    assert!(t.rejected.is_empty(), "{:?}", t.rejected);
+    assert_eq!(t.name(ORI), None, "a line taken out by two take-outs in force came back");
+    let (store, t) = kept_record(lines);
+    assert_eq!(t.name(ORI), None);
+    same_after_restart(&store, &t);
 }

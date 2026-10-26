@@ -92,14 +92,15 @@ pub fn store(s: &dyn Store) -> Result<(), String> {
         return Err("an entry was not found by its signature's standard spelling (identity::canonical_sig)".into());
     }
     // ALL OR NONE: erasing a row never kept refuses the whole keep — the entry with it is not kept either
-    let erased = |g: i64| serde_json::json!({ "g": g, "is": "be", "value": {}, "sig": { "sig": sig(g) }, "erased_by": 6 });
+    let erased = |g: i64| crate::twin::erased_row(&e(g), 6);
     refused(s.keep("a", &[e(6)], &[erased(3)], b"state 4"), "erasing a row never kept")?;
     if s.entry(6).is_some() || ok(s.state(), "read the state")?.as_deref() != Some(&b"state 2"[..]) {
         return Err("a keep refused kept part of itself".into());
     }
     ok(s.keep("a", &[e(6)], &[erased(2)], b"state 5"), "keep a purge with what stays of the row it erases")?;
-    if s.entry(2) != Some(erased(2)) || s.signed(&standard) != Some(2) || s.entry(6) != Some(e(6)) {
-        return Err("an erased row does not read as what stays of it, or is not found by its signature still".into());
+    let hashed = crate::twin::signed_as(&erased(2)).expect("what stays of a signed line is found by its signature's hash");
+    if s.entry(2) != Some(erased(2)) || s.signed(&standard).is_some() || s.signed(&hashed) != Some(2) || s.entry(6) != Some(e(6)) {
+        return Err("an erased row does not read as what stays of it, is still found by its signature, or not by its hash".into());
     }
     refused(s.release("b"), "releasing a lease one does not hold")?;
     ok(s.release("a"), "release")?;
@@ -258,6 +259,16 @@ pub fn keys(k: &dyn Keys, name: &str) -> Result<(), String> {
     ok(k.forget_secret(&secret), "forget the secret")?;
     if ok(k.has_secret(&secret), "ask for the secret forgotten")? {
         return Err("a forgotten secret was still kept".into());
+    }
+    // THE ANCHOR: none before one is kept; read back whole; the newest kept in its place
+    let slot = format!("{name} anchor");
+    if ok(k.anchor(&slot), "read an anchor never kept")?.is_some() {
+        return Err("an anchor never kept was read".into());
+    }
+    ok(k.keep_anchor(&slot, b"{\"g\":1}"), "keep an anchor")?;
+    ok(k.keep_anchor(&slot, b"{\"g\":2}"), "keep it again")?;
+    if ok(k.anchor(&slot), "read the anchor")?.as_deref() != Some(&b"{\"g\":2}"[..]) {
+        return Err("the anchor kept last did not read back whole".into());
     }
     refused(k.forget_secret(&secret), "forgetting a secret not kept")?;
     Ok(())

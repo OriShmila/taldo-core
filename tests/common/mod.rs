@@ -114,13 +114,18 @@ pub fn keep(store: &taldo_core::fakes::FakeStore, t: &mut taldo_core::twin::Twin
     use taldo_core::seams::Store;
     arrives(&mut e);
     let a = e["arrived"].as_i64().unwrap();
-    let erased = t.erased_rows(&e);
     let mut next = t.clone();
-    let (row, _) = next.take(&e, a, TALDO, t.entries.top().max(-1), &mark_sign)?;
-    store.keep("k", &[row], &erased, &next.snapshot()).unwrap();
+    let taken = next.take(&e, a, TALDO, t.entries.top(), &mark_sign)?;
+    store.keep("k", &[taken.row], &taken.erased, &next.snapshot()).unwrap();
     next.rows_kept();
     *t = next;
     Ok(())
+}
+/// TALDO'S WORD OF WHERE THE RECORD IS, signed — as its keeper keeps it outside the store
+pub fn anchor_of(t: &taldo_core::twin::Twin, state: &[u8]) -> Value {
+    let mut a = t.anchor(state);
+    a["sig"] = mark_sign(taldo_core::rows::canonical_of(&a).as_bytes()).unwrap();
+    a
 }
 /// a store, its lease taken by the keeper
 pub fn store() -> std::sync::Arc<taldo_core::fakes::FakeStore> {

@@ -332,6 +332,11 @@ pub trait Keys {
     fn has_secret(&self, name: &str) -> Answer<bool>;
     /// the secret is gone
     fn forget_secret(&self, name: &str) -> Answer<()>;
+    /// THE RECORD'S ANCHOR — Taldo's signed word of where its record is (`Twin::anchor`) — kept beside the keys, outside the store,
+    /// under `slot` (a second keep replaces it): no one who can change the store's files can change it, nor put an older one back
+    fn keep_anchor(&self, slot: &str, anchor: &[u8]) -> Answer<()>;
+    /// the anchor kept under `slot`, whole — or none
+    fn anchor(&self, slot: &str) -> Answer<Option<Vec<u8>>>;
 }
 
 // ─── IDENTITY: proving who or what something outside is ───

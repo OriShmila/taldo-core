@@ -139,16 +139,21 @@ pub struct Twin {
     pub(crate) erased: OrdMap<i64, i64>,
     /// THE LAST MARK'S HASH: the next mark is chained to it (`mark`) — empty before the first
     pub(crate) head: String,
+    /// THE LAST LINE KEPT OR READ: with `head`, where the record is (`anchor`)
+    pub(crate) last: i64,
 }
 
-/// A LINE TAKEN OUT: the take-out that took it out, and where it was, by whom and of what kind — never what it said. A twin folded
+/// A LINE TAKEN OUT: the take-outs that took it out, and where it was, by whom and of what kind — never what it said. A twin folded
 /// from a list, with no rows, holds the line itself, so a take-out taken out brings it back
 #[derive(Clone, Debug)]
 pub struct Out {
-    pub by: i64,
+    /// every take-out that named it: it is out while one of them counts (`out_now`)
+    pub by: Vector<i64>,
     pub at: String,
     pub writer: String,
     pub is: String,
+    /// its row's hash, as it was taken: read again from the rows, it is that row
+    pub(crate) hash: String,
     pub(crate) line: Option<Arc<Value>>,
 }
 
@@ -345,40 +350,41 @@ pub fn core_kind(is: &str) -> bool {
 /// WHAT DECIDED WHO MAY DO WHAT: never erased by a purge, never taken out — acts elsewhere were taken under them, and none holds a
 /// word anyone said
 const DECIDING: [&str; 11] = ["make", "delete", "restore", "purge", "take out", "grant", "revoke", "seal", "block", "takeover", "decline"];
-/// WHAT STAYS OF A LINE A PURGE ERASED: its number, where it was, by whom, its kind, what it answered or named (ids and numbers),
-/// when it arrived, its signature's own (so the same act is never taken again) and its mark — never a word it said — and the purge
+/// WHAT STAYS OF A LINE A PURGE ERASED: its number, where it was, by whom, its kind, what it answered or named (by the record's own
+/// roles: ids and numbers), when it arrived, a hash of its signature (so the same act is never taken again, and no guess at its
+/// words can be checked against it) and its mark — never a word it said, nor the salt its fingerprint was made with — and the purge
 pub fn erased_row(row: &Value, purge: i64) -> Value {
-    json!({ "g": row["g"], "by": row["by"], "at": row["at"], "is": row["is"], "refs": row["refs"], "value": {}, "arrived": row["arrived"], "sig": { "sig": row["sig"]["sig"] }, "mark": row["mark"], "erased_by": purge })
+    let sig = row["sig"]["sig"].as_str().and_then(crate::identity::canonical_sig).map(|s| sha(&s));
+    json!({ "g": row["g"], "by": row["by"], "at": row["at"], "is": row["is"], "refs": row["refs"], "value": {}, "arrived": row["arrived"], "sig_hash": sig, "mark": row["mark"], "erased_by": purge })
 }
-/// ONE JSON VALUE IN ONE SPELLING: every object's keys in order
-fn canonical(v: &Value) -> String {
-    fn sorted(v: &Value) -> Value {
-        match v {
-            Value::Object(o) => {
-                let mut keys: Vec<&String> = o.keys().collect();
-                keys.sort();
-                Value::Object(keys.into_iter().map(|k| (k.clone(), sorted(&o[k]))).collect())
-            }
-            Value::Array(a) => Value::Array(a.iter().map(sorted).collect()),
-            x => x.clone(),
-        }
+/// HOW A STORE FINDS A ROW BY ITS SIGNATURE (`Source::signed`): its signature's standard spelling — or, for what stays of an erased
+/// line, `h:` and the hash of it. Nothing else is looked up
+pub fn signed_as(row: &Value) -> Option<String> {
+    match row["sig_hash"].as_str() {
+        Some(h) => Some(format!("h:{h}")),
+        None => row["sig"]["sig"].as_str().and_then(crate::identity::canonical_sig),
     }
-    sorted(v).to_string()
 }
 fn sha(s: &str) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
-/// A LINE'S FINGERPRINT, as its mark holds it: the act as signed, and its signature in its standard spelling
+/// A LINE'S FINGERPRINT, as its mark holds it: its salt — Taldo's own, kept in the row and erased with the words, so no guess at
+/// the words can be checked against what stays — the act as signed, and its signature in its standard spelling
 fn line_hash(e: &Value) -> String {
     let sig = e["sig"]["sig"].as_str().and_then(crate::identity::canonical_sig).unwrap_or_default();
-    sha(&format!("{}\n{sig}", crate::identity::signed_bytes(e)))
+    sha(&format!("{}\n{}\n{sig}", e["salt"].as_str().unwrap_or(""), crate::identity::signed_bytes(e)))
 }
 /// THE MARK, before Taldo signs it: which line (its number and fingerprint), when it arrived, who signed it with which key and
 /// whether a person was there — as admission found it — chained to the mark before (`prev`), by which Taldo (`by`), made when the
-/// record's last line was `made`: its key is one that Taldo had then
-fn mark_of(row: &Value, signed: &crate::identity::Signed, prev: &str, by: &str, made: i64) -> Value {
-    json!({ "g": row["g"], "line": line_hash(row), "arrived": row["arrived"], "signer": signed.signer, "key": signed.key, "present": signed.present, "prev": prev, "by": by, "made": made })
+/// record's last line was `made`: its key is one that Taldo had then. A purge's mark holds, too, the hash of what stays of each line
+/// it erases (`erased`): what stays is bound by it
+fn mark_of(row: &Value, signed: &crate::identity::Signed, prev: &str, by: &str, made: i64, erased: &[Value]) -> Value {
+    let mut m = json!({ "g": row["g"], "line": line_hash(row), "arrived": row["arrived"], "signer": signed.signer, "key": signed.key, "present": signed.present, "prev": prev, "by": by, "made": made });
+    if row["is"] == "purge" {
+        m["erased"] = Value::Object(erased.iter().map(|r| (r["g"].to_string(), json!(crate::rows::row_hash(r)))).collect());
+    }
+    m
 }
 /// WHAT TALDO SIGNS OF A MARK: the mark without its signature, in one spelling
 pub fn mark_bytes(mark: &Value) -> String {
@@ -386,11 +392,18 @@ pub fn mark_bytes(mark: &Value) -> String {
     if let Some(o) = m.as_object_mut() {
         o.remove("sig");
     }
-    canonical(&m)
+    crate::rows::canonical(&m)
 }
 /// a mark's hash, signature and all: what the next mark is chained to
 fn mark_hash(mark: &Value) -> String {
-    sha(&canonical(mark))
+    crate::rows::row_hash(mark)
+}
+/// A LINE TAKEN: its row to keep, what stays of each line it erases (a purge's keeper keeps those in place of their rows, in the
+/// same keep), and what admission found
+pub struct Taken {
+    pub row: Value,
+    pub erased: Vec<Value>,
+    pub signed: crate::identity::Signed,
 }
 /// WHAT EACH KIND ANSWERS, AND WHOSE ANSWER COUNTS — the one table of it, held at admission, so every answer in the twin is one that
 /// counts: an undo, a carrying out, a taking back and a no answer only what they name; a delete, a grant and a take-over are answered
@@ -532,15 +545,48 @@ impl Twin {
         }
         e["value"]["lines"].as_array().into_iter().flatten().filter_map(Value::as_i64).collect()
     }
-    /// THE ROWS A PURGE HAS ITS KEEPER PUT IN PLACE OF THE ROWS OF THE LINES IT ERASES (`erased_row`), read from the rows — before
-    /// they are kept
-    pub fn erased_rows(&self, purge: &Value) -> Vec<Value> {
-        if purge["is"] != "purge" {
-            return vec![];
+    /// LINE `g` AS IT WAS TAKEN: counted, taken out, or read from the rows
+    fn line_row(&self, g: i64) -> Option<Arc<Value>> {
+        if let Some(l) = self.entries.get(&g) {
+            return Some(l);
         }
-        let p = purge["g"].as_i64().unwrap_or(-1);
-        let src = self.entries.source();
-        Self::lines_named(purge).into_iter().filter_map(|g| src.and_then(|s| s.entry(g))).map(|r| erased_row(&r, p)).collect()
+        let o = self.taken_out.get(&g)?;
+        if let Some(l) = &o.line {
+            return Some(l.clone());
+        }
+        let row = self.entries.source()?.entry(g)?;
+        assert!(crate::rows::row_hash(&row) == o.hash, "row {g} of the record is not the row Taldo took out: it was changed in the store");
+        Some(Arc::new(row))
+    }
+    /// THE RECORD'S TALDO — the one that marks it: the first node of kind taldo made under the record's first person
+    pub fn record_taldo(&self) -> Option<String> {
+        let first = |n: &&Node| n.at.front().copied().unwrap_or(i64::MAX);
+        let person = self.nodes.values().filter(|n| n.parent.is_none()).min_by_key(first)?;
+        self.children(&person.id).iter().filter_map(|c| self.nodes.get(c)).filter(|n| n.kind == "taldo").min_by_key(first).map(|n| n.id.clone())
+    }
+    /// THE KEYS THAT MARK THE RECORD NOW: its Taldo's own — none while it is blocked or deleted
+    fn marking_keys(&self) -> Vec<String> {
+        let Some(t) = self.record_taldo().filter(|t| !self.blocked(t) && !self.deleted(t)) else { return vec![] };
+        self.nodes[&t].who.get("keys").and_then(Value::as_array).into_iter().flatten().filter_map(|k| k["key"].as_str().map(String::from)).collect()
+    }
+    /// WHERE THE RECORD IS: its last line, its last mark's hash and its state's hash — what Taldo signs and keeps outside the store
+    /// (`anchored`), so a record cut short, put back or changed is never read
+    pub fn anchor(&self, state: &[u8]) -> Value {
+        use sha2::{Digest, Sha256};
+        json!({ "g": self.last, "head": self.head, "state": Sha256::digest(state).iter().map(|b| format!("{b:02x}")).collect::<String>() })
+    }
+    /// WHETHER THE RECORD READ IS WHERE TALDO LAST LEFT IT: `anchor` is Taldo's signed word of it (`{ g, head, state, sig }`), signed
+    /// by a key that marks the record now — or why not
+    pub fn anchored(&self, state: &[u8], anchor: &Value) -> Result<(), String> {
+        let mut said = anchor.clone();
+        let sig = said.as_object_mut().and_then(|o| o.remove("sig")).ok_or("the anchor is not signed")?;
+        if said != self.anchor(state) {
+            return Err(format!("the record is not where Taldo last left it: it is at #{} ({}), Taldo left it at #{} ({})", self.last, self.head, said["g"], said["head"]));
+        }
+        if !self.marking_keys().iter().any(|k| sig["key"] == k.as_str()) {
+            return Err("the anchor is signed by a key that does not mark the record".into());
+        }
+        crate::identity::holds(crate::rows::canonical(&said).as_bytes(), &sig).map_err(|w| format!("the anchor: {w}"))
     }
     /// WHAT THIS TWIN TOOK, KEPT BY ITS KEEPER: from now on read from the rows
     pub fn rows_kept(&mut self) {
@@ -548,31 +594,20 @@ impl Twin {
     }
     /// WHETHER LINE `g` IS TAKEN OUT NOW: a take-out names it, and that take-out is not taken out itself
     fn out_now(&self, g: i64) -> bool {
-        let mut x = g;
-        let mut out = false;
-        while let Some(o) = self.taken_out.get(&x) {
-            out = !out;
-            x = o.by;
-        }
-        out
+        // a take-out is always after what it names: this ends
+        self.taken_out.get(&g).is_some_and(|o| o.by.iter().any(|t| !self.out_now(*t)))
     }
     /// THIS TWIN AGAIN FROM ITS LINES, each landed as it was taken — none judged again — but what is taken out now (`out_now`), and
     /// of what a purge erased only what stays of it (`erased_row`): what is, after a take-out or a purge
     fn replay(&self) -> Twin {
-        let mut t = Twin { entries: self.entries.fresh(), taken_out: self.taken_out.clone(), erased: self.erased.clone(), head: self.head.clone(), rejected: self.rejected.clone(), signatures: self.signatures.clone(), ..Default::default() };
+        let mut t = Twin { entries: self.entries.fresh(), taken_out: self.taken_out.clone(), erased: self.erased.clone(), head: self.head.clone(), last: self.last, rejected: self.rejected.clone(), signatures: self.signatures.clone(), ..Default::default() };
         let mut lines: BTreeSet<i64> = self.entries.keys().collect();
         lines.extend(self.taken_out.keys());
         for g in lines {
             if t.out_now(g) {
                 continue;
             }
-            let line = match self.entries.get(&g) {
-                Some(l) => l,
-                None => match self.taken_out.get(&g).and_then(|o| o.line.clone()) {
-                    Some(l) => l,
-                    None => Arc::new(self.entries.source().and_then(|s| s.entry(g)).expect("a line taken out is in the rows")),
-                },
-            };
+            let line = self.line_row(g).expect("a line taken, or taken out, is in the rows");
             let line = match self.erased.get(&g) {
                 Some(p) if line.get("erased_by").is_none() => Arc::new(erased_row(&line, *p)),
                 _ => line,
@@ -883,19 +918,30 @@ impl Twin {
             }
         }
     }
-    /// A LINE TAKEN, AS ITS KEEPER TAKES IT: judged once (`admit`), marked — Taldo's word of what admission found, signed by `sign` as
-    /// the Taldo `marker`, chained to the mark before — and landed. The row to keep, and what admission found; or why not, and this
-    /// twin as it was. A purge's keeper puts `erased_rows` in place of the rows it erases, in the same keep. `made`: the record's last
-    /// line when the mark is made — the line before this one as it arrives; a record marked once after it was kept, its last
-    pub fn take(&mut self, e: &Value, arrived: i64, marker: &str, made: i64, sign: &dyn Fn(&[u8]) -> Result<Value, String>) -> Result<(Value, crate::identity::Signed), Value> {
+    /// A LINE TAKEN, AS ITS KEEPER TAKES IT: judged once (`admit`), salted and marked — Taldo's word of what admission found, signed by
+    /// `sign` as the Taldo `marker`, chained to the mark before — and landed. What to keep (`Taken`); or why not, and this twin as it
+    /// was. `made`: the record's last line when the mark is made — the line before this one as it arrives; a record marked once after
+    /// it was kept, its last
+    pub fn take(&mut self, e: &Value, arrived: i64, marker: &str, made: i64, sign: &dyn Fn(&[u8]) -> Result<Value, String>) -> Result<Taken, Value> {
         let signed = self.admit(e, arrived)?;
+        let refused = |why: String| json!({ "g": e["g"], "why": format!("Taldo could not mark it: {why}") });
+        let g = e["g"].as_i64().expect("admitted: it has its number");
         let mut row = kept(e, arrived);
-        let mut mark = mark_of(&row, &signed, &self.head, marker, made);
-        mark["sig"] = sign(mark_bytes(&mark).as_bytes()).map_err(|why| json!({ "g": e["g"], "why": format!("Taldo could not mark it: {why}") }))?;
+        // ITS SALT: Taldo's own signature of the line, hashed — made by no one else, erased with the words
+        let salt = sign(crate::identity::signed_bytes(e).as_bytes()).map_err(refused)?;
+        row["salt"] = json!(sha(&salt["sig"].to_string()));
+        let erased: Vec<Value> = if e["is"] == "purge" {
+            Self::lines_named(e).into_iter().map(|x| self.line_row(x).map(|r| erased_row(&r, g)).ok_or_else(|| refused(format!("#{x} is in no row")))).collect::<Result<_, _>>()?
+        } else {
+            vec![]
+        };
+        let mut mark = mark_of(&row, &signed, &self.head, marker, made, &erased);
+        mark["sig"] = sign(mark_bytes(&mark).as_bytes()).map_err(refused)?;
         row["mark"] = mark;
         self.head = mark_hash(&row["mark"]);
+        self.last = g;
         self.land_line(&row, signed.present, arrived);
-        Ok((row, signed))
+        Ok(Taken { row, erased, signed })
     }
     /// ONE KEPT ROW READ: its mark checked (`refold`), and the line landed as it was taken — or why the row is not what was kept
     pub(crate) fn read(&mut self, row: &Value, reading: &mut Reading) -> Result<(), String> {
@@ -919,7 +965,7 @@ impl Twin {
                     return Err(why("it is not the line that was marked"));
                 }
                 let key = m["key"].as_str().unwrap_or("");
-                if !(key.is_empty() && row["sig"].is_null() && g == 0) {
+                if !(key.is_empty() && crate::identity::unsigned_beginning(self, row)) {
                     let (k, _) = crate::identity::signer(row).map_err(|w| why(&w))?;
                     if k != key {
                         return Err(why("it is signed by another key than its mark says"));
@@ -939,33 +985,33 @@ impl Twin {
         self.land_line(row, present, arrived);
         self.head = mark_hash(m);
         reading.last = g;
+        self.last = g;
         self.marks_hold(reading)?;
-        // A PURGE READ: every line it names is erased, by it — its row holds no word
+        // A PURGE READ: every line it names is erased, by it — its row holds no word, and is what stays of it as the purge's mark says
         for x in Self::lines_named(row).into_iter().filter(|_| row["is"] == "purge") {
             reading.erased.remove(&x);
-            let erased = self.entries.source().and_then(|s| s.entry(x)).is_some_and(|r| r["erased_by"] == g);
-            if !erased {
-                return Err(why(&format!("it erases #{x}, whose row still holds its words")));
+            let said = &m["erased"][x.to_string()];
+            let kept = self.entries.source().and_then(|s| s.entry(x));
+            if !kept.as_ref().is_some_and(|r| r["erased_by"] == g && said.as_str() == Some(crate::rows::row_hash(r).as_str())) {
+                return Err(why(&format!("it erases #{x}, whose row is not what stays of it as the purge says")));
             }
         }
         Ok(())
     }
-    /// THE MARKS WAITING, CHECKED once the rows read reach the line each was made at (`made`): by a node of kind taldo under the
-    /// record's person, with a key it had then
+    /// THE MARKS WAITING, CHECKED once the rows read reach the line each was made at (`made`): by the record's Taldo, with a key that
+    /// marked the record then (`marking_keys`: never while that Taldo is blocked or deleted)
     fn marks_hold(&self, reading: &mut Reading) -> Result<(), String> {
         for m in std::mem::take(&mut reading.early) {
-            let by = id_of(&m["by"]);
             let made = m["made"].as_i64().unwrap_or(i64::MAX);
-            let Some(n) = self.nodes.get(&by).filter(|_| made <= reading.last) else {
+            let Some(t) = self.record_taldo().filter(|_| made <= reading.last) else {
                 reading.early.push(m);
                 continue;
             };
-            if n.kind != "taldo" || n.parent.as_deref().is_none_or(|p| self.parent(p).is_some()) {
-                return Err(format!("#{}'s mark is by {by}, which is not a Taldo of the record's person", m["g"]));
+            if m["by"] != t.as_str() {
+                return Err(format!("#{}'s mark is by {}, not the record's Taldo ({t})", m["g"], m["by"]));
             }
-            let has = n.who.get("keys").and_then(Value::as_array).into_iter().flatten().any(|k| k["key"] == m["sig"]["key"]);
-            if !has {
-                return Err(format!("#{}'s mark is signed by a key {by} does not have", m["g"]));
+            if !self.marking_keys().iter().any(|k| m["sig"]["key"] == k.as_str()) {
+                return Err(format!("#{}'s mark is signed by a key that did not mark the record then", m["g"]));
             }
             crate::identity::holds(mark_bytes(&m).as_bytes(), &m["sig"]).map_err(|w| format!("#{}'s mark: {w}", m["g"]))?;
         }
@@ -992,8 +1038,8 @@ impl Twin {
             let taken = match self.entries.source() {
                 None => self.signatures.contains(s),
                 // an overlay's own acts have no rows: it knows their signatures itself
-                // every row kept is a line taken — counted, taken out, or erased (its signature stays): none is taken again
-                Some(src) => src.signed(s).is_some_and(|x| Some(x) != e["g"].as_i64()) || self.signatures.contains(s),
+                // every row kept is a line taken — counted, taken out, or erased (found by its signature's hash): none is taken again
+                Some(src) => [s.to_string(), format!("h:{}", sha(s))].iter().any(|k| src.signed(k).is_some_and(|x| Some(x) != e["g"].as_i64())) || self.signatures.contains(s),
             };
             if taken {
                 return Err(json!({ "g": e["g"], "why": "this signed act was already taken" }));
@@ -1285,7 +1331,7 @@ impl Twin {
         // its lines without that (`replay`), none judged again; then it lands on that. Made again, it finds what it names done
         let named = Self::lines_named(e);
         let new: Vec<i64> = match e["is"].as_str() {
-            Some("take out") => named.iter().copied().filter(|x| self.taken_out.get(x).is_none_or(|o| o.by != g)).collect(),
+            Some("take out") => named.iter().copied().filter(|x| self.taken_out.get(x).is_none_or(|o| !o.by.contains(&g))).collect(),
             Some("purge") => named.iter().copied().filter(|x| !self.erased.contains_key(x)).collect(),
             _ => vec![],
         };
@@ -1293,11 +1339,22 @@ impl Twin {
             for x in &new {
                 if e["is"] == "purge" {
                     self.erased.insert(*x, g);
+                    // A LINE TAKEN OUT, ERASED: its row is what stays of it from now on, and nothing more is held of it
+                    if let Some(line) = self.taken_out.get(x).and_then(|_| self.line_row(*x)) {
+                        let stays = erased_row(&line, g);
+                        let o = self.taken_out.get_mut(x).expect("taken out");
+                        o.hash = crate::rows::row_hash(&stays);
+                        o.line = o.line.as_ref().map(|_| Arc::new(stays));
+                    }
                     continue;
                 }
-                let line = self.entries.get(x).expect("a line taken out was taken");
+                if let Some(o) = self.taken_out.get_mut(x) {
+                    o.by.push_back(g);
+                    continue;
+                }
+                let line = self.entries.get(x).expect("a line a take-out names when it is taken counts");
                 let held = self.entries.source().is_none().then(|| line.clone());
-                self.taken_out.insert(*x, Out { by: g, at: id_of(&line["at"]), writer: id_of(&line["by"]), is: line["is"].as_str().unwrap_or("").to_string(), line: held });
+                self.taken_out.insert(*x, Out { by: Vector::unit(g), at: id_of(&line["at"]), writer: id_of(&line["by"]), is: line["is"].as_str().unwrap_or("").to_string(), hash: crate::rows::row_hash(&line), line: held });
             }
             let again = self.replay();
             touched.extend(new.iter().filter_map(|x| self.entries.get(x).map(|l| id_of(&l["at"]))).filter(|x| again.nodes.contains_key(x)));
