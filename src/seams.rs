@@ -32,6 +32,27 @@ pub trait Record: Send + Sync {
     fn happened(&self, m: &Move, cost: &Cost) -> Result<(), String>;
 }
 
+/// AN ENTRY NOT WRITTEN: the twin refused it — a door said no, with why — or it could not be kept (a fault, with why). Never told
+/// apart by its words
+#[derive(Debug, Clone, PartialEq)]
+pub enum Unwritten {
+    Refused(String),
+    Failed(String),
+}
+impl core::fmt::Display for Unwritten {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Unwritten::Refused(why) => write!(f, "refused: {why}"),
+            Unwritten::Failed(why) => write!(f, "{why}"),
+        }
+    }
+}
+impl From<Unwritten> for String {
+    fn from(u: Unwritten) -> String {
+        u.to_string()
+    }
+}
+
 /// WHAT A CALL USED, as its adapter measured it — a value it could not measure is None, never 0
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Cost {
