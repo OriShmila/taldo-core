@@ -305,11 +305,12 @@ impl Twin {
     pub(crate) fn takeover_granted(&self, person: &str, proof: &str) -> bool {
         self.at_kind(person, "grant").any(|(g, e)| e["value"]["action"] == "take over" && id_of(&e["value"]["to"]) == proof && !self.revoked(g))
     }
-    /// THE KEYS TAKEN OVER FOR A NODE that sign by `arrived`: each take-over at it a day old by then, not declined
+    /// THE KEYS TAKEN OVER FOR A NODE that sign by `arrived`: each take-over at it a day old by then, not declined by the node or one
+    /// above it — no one else's decline undoes it
     pub(crate) fn taken_over(&self, id: &str, arrived: i64) -> Vec<Value> {
         self.at_kind(id, "takeover")
             .filter(|(g, _)| self.arrivals.get(g).is_some_and(|a| a + TAKEOVER_WAITS <= arrived))
-            .filter(|(g, _)| !self.answers.get(g).into_iter().flatten().any(|x| self.is(*x) == "decline"))
+            .filter(|(g, _)| !self.answers.get(g).into_iter().flatten().any(|x| self.is(*x) == "decline" && self.within(id, &id_of(&self.e(*x)["by"]))))
             .flat_map(|(_, e)| e["value"]["keys"].as_array().cloned().unwrap_or_default())
             .collect()
     }
@@ -662,11 +663,12 @@ impl Twin {
             if e["is"] == "make" && e["value"]["kind"].as_str().is_some_and(|k| matches!(k, "person" | "device" | "recovery code")) {
                 return Err(json!({ "g": e["g"], "why": format!("{by} runs sealed code: it never makes a {}", e["value"]["kind"]) }));
             }
-            // nor gives keys any other way — a take-over, a node made with them, a grant to take over — nor seals code: what runs is
-            // said by a level above, never by code
-            let keys = e["is"] == "takeover" || (e["is"] == "make" && e["value"].get("keys").is_some()) || (e["is"] == "grant" && e["value"]["action"] == "take over");
-            if keys || e["is"] == "seal" {
-                return Err(json!({ "g": e["g"], "why": format!("{by} runs sealed code: it never writes a {} that {}", e["is"], if keys { "gives keys" } else { "says what code runs" }) }));
+            // nor gives keys any other way (a take-over, a node made with them), nor grants — what code may do never passes to a key —
+            // nor seals: what runs is said by a level above, never by code
+            let keys = e["is"] == "takeover" || (e["is"] == "make" && e["value"].get("keys").is_some());
+            if keys || e["is"] == "grant" || e["is"] == "seal" {
+                let what = if keys { "gives keys" } else if e["is"] == "grant" { "passes on what it may do" } else { "says what code runs" };
+                return Err(json!({ "g": e["g"], "why": format!("{by} runs sealed code: it never writes a {} that {what}", e["is"]) }));
             }
         }
         // AN ACT AT, OR ON, WHAT IS NOT YOURS (beside you, above you, another owner's): taken only under a grant in force on that node

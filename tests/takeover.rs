@@ -81,6 +81,17 @@ fn she_stops_a_take_over_from_any_key_of_hers() {
 }
 
 #[test]
+fn no_one_else_stops_her_take_over() {
+    let t = with(&[
+        grant(10, "sister"),
+        takeover(20, T0, "sister"),
+        act(21, "stranger", "stranger", "decline", json!({ "re": 20 }), json!({})),
+        as_new_phone(30, T0 + TAKEOVER_WAITS),
+    ]);
+    assert!(taken(&t, 30), "someone else's decline undid her take-over: {}", why(&t, 30));
+}
+
+#[test]
 fn only_a_granted_way_takes_over_and_only_keys() {
     let t = with(&[grant(10, "sister"), takeover(20, T0, "stranger")]);
     assert!(!taken(&t, 20), "someone she never granted took over");

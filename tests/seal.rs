@@ -129,6 +129,7 @@ fn sealed_code_never_governs() {
         (17, ENGINE, "takeover", json!({}), json!({ "keys": [] })),
         (18, "Ori › Taldo › engine › helper", "make", json!({ "in": ENGINE }), json!({ "kind": "agent", "keys": [] })),
         (19, ENGINE, "grant", json!({}), json!({ "to": "Ori", "action": "take over" })),
+        (21, ENGINE, "grant", json!({}), json!({ "to": "Ori", "action": "make" })),
         (20, "Ori › Taldo › engine › part", "seal", json!({}), whole('b')),
     ] {
         let t = with(&[sealed.clone(), act(g, ENGINE, at, is, refs, value)]);
