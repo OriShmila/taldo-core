@@ -185,6 +185,8 @@ fn meets(c: &Value, details: &dyn Fn(&str) -> Map<String, Value>) -> bool {
     let d = details(&id_of(&c["expect"]["at"]));
     has.iter().all(|(k, x)| d.get(k) == Some(x))
 }
+/// WHAT GOVERNS A NODE, as a detail: the keys it signs with, who carries it, what stays when it is deleted — set only by it or above it
+pub const GOVERNING: [&str; 3] = ["keys", "carried_by", "keep_deleted"];
 /// A SEAL IS WHOLE: `wasm`, the module's hash; `cwasm`, its ready machine code's hash for each machine; `contract`, what it was built
 /// to; `reach`, what it may call — and nothing else
 fn seal_whole(v: &Value) -> Result<(), String> {
@@ -639,6 +641,16 @@ impl Twin {
         if e["is"] == "make" {
             if let Some(k) = e["value"].as_object().into_iter().flatten().map(|(k, _)| k).find(|k| *k != "kind" && *k != "keys") {
                 return Err(json!({ "g": e["g"], "why": format!("a make says only its kind (and keys) — its {k} is a detail after it") }));
+            }
+        }
+        // WHAT GOVERNS A NODE — the keys it signs with, who carries it, what stays when it is deleted — is changed only by the node itself
+        // or a node above it, never under a grant: a grant to write a node's details is never a grant to become it (a node made under a
+        // grant is given its first keys by its maker, as ever)
+        if e["is"] == "be" {
+            if let Some(k) = GOVERNING.iter().find(|k| e["value"].get(**k).is_some()) {
+                if !root && !self.within(&at, &by) {
+                    return Err(json!({ "g": e["g"], "why": format!("the {k} of {at} is set only by it or a node above it — never under a grant") }));
+                }
             }
         }
         // AN ACT AT, OR ON, WHAT IS NOT YOURS (beside you, above you, another owner's): taken only under a grant in force on that node

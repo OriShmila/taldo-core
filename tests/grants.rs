@@ -93,3 +93,21 @@ fn a_grant_with_a_budget_takes_acts_while_what_was_spent_is_under_it() {
     let t = with(&w, &[windowed, call(11, 8.0), call(100, 8.0)]);
     assert!(taken(&t, 100), "a call after the window was counted against it: {:?}", t.rejected);
 }
+
+// A GRANT TO WRITE A NODE'S DETAILS IS NEVER A GRANT TO BECOME IT: under a grant of `be`, its plain details are written — its keys, who
+// carries it and what stays when it is deleted are taken only from it or a node above it
+#[test]
+fn a_grant_never_sets_what_governs_a_node() {
+    let w = world();
+    let grant = act(10, "Ori", "Ori › files", "grant", json!({}), json!({ "to": p("Ori › Claude"), "action": "be", "below": true }));
+    let t = with(&w, &[grant.clone(), act(11, "Ori › Claude", "Ori › files › contract", "be", json!({}), json!({ "status": "signed" }))]);
+    assert!(taken(&t, 11), "a granted detail was refused: {:?}", t.rejected);
+    for (g, k) in [(12, "keys"), (13, "carried_by"), (14, "keep_deleted")] {
+        let t = with(&w, &[grant.clone(), act(g, "Ori › Claude", "Ori › files › contract", "be", json!({}), json!({ k: [] }))]);
+        assert!(!taken(&t, g), "{k} was set under a grant");
+        assert!(t.rejected.iter().any(|r| r["why"].as_str().unwrap_or("").contains("never under a grant")), "{:?}", t.rejected);
+    }
+    // the node itself, and a node above it, set them as ever
+    let t = with(&w, &[act(10, "Ori", "Ori › files › contract", "be", json!({}), json!({ "keep_deleted": true }))]);
+    assert!(taken(&t, 10), "a node above could not set what governs below it: {:?}", t.rejected);
+}
