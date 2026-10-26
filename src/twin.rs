@@ -580,6 +580,10 @@ impl Twin {
         let Some(t) = self.record_taldo().filter(|t| !self.blocked(t) && !self.deleted(t)) else { return vec![] };
         self.nodes[&t].who.get("keys").and_then(Value::as_array).into_iter().flatten().filter_map(|k| k["key"].as_str().map(String::from)).collect()
     }
+    /// WHETHER KEY `k` MARKS THE RECORD as it is (`marking_keys`) — the one answer, for a mark kept and a mark read
+    fn marks_with(&self, k: &str) -> bool {
+        self.marking_keys().iter().any(|x| x == k)
+    }
     /// WHERE THE RECORD IS: its last line, its last mark's hash and its state's hash — what Taldo signs and keeps outside the store
     /// (`anchored`), so a record cut short, put back or changed is never read
     pub fn anchor(&self, state: &[u8]) -> Value {
@@ -594,7 +598,7 @@ impl Twin {
         if said != self.anchor(state) {
             return Err(format!("the record is not where Taldo last left it: it is at #{} ({}), Taldo left it at #{} ({})", self.last, self.head, said["g"], said["head"]));
         }
-        if !self.marking_keys().iter().any(|k| sig["key"] == k.as_str()) {
+        if !self.marks_with(sig["key"].as_str().unwrap_or("")) {
             return Err("the anchor is signed by a key that does not mark the record".into());
         }
         crate::identity::holds(crate::rows::canonical(&said).as_bytes(), &sig).map_err(|w| format!("the anchor: {w}"))
@@ -957,7 +961,11 @@ impl Twin {
         // record after it — never Taldo deleted or blocked (or a node above it), nor its keys given to a key it does not hold: every
         // line after would never be read. (A record marked once, at its end, is held to its end instead: `made` past this line)
         let marks_with = row["mark"]["sig"]["key"].as_str().unwrap_or("");
-        if made < g && after.record_taldo().is_some() && !after.marking_keys().iter().any(|k| k == marks_with) {
+        // ITS OWN MARK HOLDS AS THE READER HOLDS IT: by a key that marks the record as it is when the line comes (`marks_hold`)
+        if made < g && self.record_taldo().is_some() && !self.marks_with(marks_with) {
+            return Err(json!({ "g": e["g"], "why": "Taldo marks with a key that does not mark the record: it marks nothing" }));
+        }
+        if made < g && after.record_taldo().is_some() && !after.marks_with(marks_with) {
             return Err(json!({ "g": e["g"], "why": "after it, the key Taldo marks with would not mark the record: Taldo is never deleted, blocked or given keys it does not hold out from under its record" }));
         }
         *self = after;
@@ -1030,7 +1038,7 @@ impl Twin {
             if m["by"] != t.as_str() {
                 return Err(format!("#{}'s mark is by {}, not the record's Taldo ({t})", m["g"], m["by"]));
             }
-            if !self.marking_keys().iter().any(|k| m["sig"]["key"] == k.as_str()) {
+            if !self.marks_with(m["sig"]["key"].as_str().unwrap_or("")) {
                 return Err(format!("#{}'s mark is signed by a key that did not mark the record then", m["g"]));
             }
             crate::identity::holds(mark_bytes(&m).as_bytes(), &m["sig"]).map_err(|w| format!("#{}'s mark: {w}", m["g"]))?;

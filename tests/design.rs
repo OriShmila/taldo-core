@@ -763,6 +763,17 @@ fn a_mark_is_checked_against_the_key_its_taldo_had_when_it_was_made() {
         }
     }
     assert!(refused.is_some_and(|w| w["g"] == 4), "the old key marked the line that let it go");
+    // A NEW KEY NEVER MARKS ITS OWN GIVING: the line is marked by a key that marks the record as it comes, or not kept
+    let mut t = Twin::default();
+    for e in lines[..3].iter().cloned() {
+        let mut e = e;
+        arrives(&mut e);
+        let made = t.entries.top();
+        t.take(&e, e["arrived"].as_i64().unwrap(), common::TALDO, made, &mark_sign).unwrap();
+    }
+    let mut giving = lines[3].clone();
+    arrives(&mut giving);
+    assert!(t.take(&giving, 3, common::TALDO, 2, &sign2).is_err(), "a new key marked its own giving");
 }
 
 // ─── THE NINTH REVIEW'S PROBES (27 Oct): one unsigned beginning; the record anchored outside its store, every row read again held to
