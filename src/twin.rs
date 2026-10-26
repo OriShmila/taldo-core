@@ -205,11 +205,18 @@ fn meets(c: &Value, details: &dyn Fn(&str) -> Map<String, Value>) -> bool {
 }
 /// WHO A NODE IS, as its details: the keys it signs with, who carries it, what stays when it is deleted — set from above (`from_above`)
 pub const GOVERNING: [&str; 3] = ["keys", "carried_by", "keep_deleted"];
-/// A SEAL IS WHOLE: `wasm`, the module's hash; `cwasm`, its ready machine code's hash for each machine; `contract`, what it was built
-/// to; `reach`, what it may call — and nothing else
+/// A SEAL IS WHOLE: level code — `wasm`, the module's hash; `cwasm`, its ready machine code's hash for each machine; `contract`, what it
+/// was built to; `reach`, what it may call — or a whole program, `program`: its hash for each machine; and nothing else
 fn seal_whole(v: &Value) -> Result<(), String> {
     let hash = |x: &Value| x.as_str().is_some_and(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
     let Some(o) = v.as_object() else { return Err("a seal says its module, its machine code, its contract and its reach".into()) };
+    // A WHOLE PROGRAM, run in a sandbox of its own (a person's Taldo in its microVM): only its sha-256 for each machine
+    if let Some(p) = o.get("program") {
+        if o.len() != 1 || !p.as_object().is_some_and(|m| !m.is_empty() && m.iter().all(|(k, h)| !k.is_empty() && hash(h))) {
+            return Err("a program's seal says only, for each machine, its program's sha-256 in hex".into());
+        }
+        return Ok(());
+    }
     if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "wasm" | "cwasm" | "contract" | "reach")) {
         return Err(format!("a seal says only its module, machine code, contract and reach — not {k}"));
     }

@@ -138,3 +138,14 @@ fn only_a_person_is_taken_over() {
         assert_eq!(why(&t, g), format!("{ENGINE} is not a person: who it is is set from above it, never taken over"), "{is}");
     }
 }
+
+// A WHOLE PROGRAM IS SEALED BY ITS HASH FOR EACH MACHINE, and by nothing else beside it
+#[test]
+fn a_program_is_sealed_by_its_hash_for_each_machine() {
+    let t = with(&[seal(10, "Ori › Taldo", json!({ "program": { "x86_64-linux": h('a') } }))]);
+    assert_eq!(t.sealed(ENGINE), Some(10), "{}", why(&t, 10));
+    for v in [json!({ "program": {} }), json!({ "program": { "x86_64-linux": "abc" } }), json!({ "program": { "x86_64-linux": h('a') }, "reach": [] })] {
+        let t = with(&[seal(10, "Ori › Taldo", v.clone())]);
+        assert_eq!(why(&t, 10), "a program's seal says only, for each machine, its program's sha-256 in hex", "{v}");
+    }
+}
