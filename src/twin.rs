@@ -651,6 +651,11 @@ impl Twin {
                 return Err(json!({ "g": e["g"], "why": "a take-over brings only keys, at the one it takes over for" }));
             }
         }
+        // ONLY A PERSON IS TAKEN OVER — the one way a node says who it is by itself, so only one with nothing above it: everything else
+        // is given who it is from above
+        if (e["is"] == "takeover" || (e["is"] == "grant" && e["value"]["action"] == "take over")) && self.parent(&at).is_some() {
+            return Err(json!({ "g": e["g"], "why": format!("{at} is not a person: who it is is set from above it, never taken over") }));
+        }
         // WHAT A NODE RUNS AND WHO IT IS ARE SET FROM ABOVE: a seal (the code it runs, by hash) and its keys, who carries it and what
         // stays when it is deleted — written only by a node above it, never by the node itself, what is under it or beside it, and
         // under no grant; a person, with nothing above them, says who they are themselves. So nothing ever changes what it is or runs

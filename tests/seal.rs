@@ -129,3 +129,12 @@ fn who_a_node_is_is_set_from_above() {
     let t = with(&[act(10, ENGINE, "Ori › Taldo › engine › part", "be", json!({}), json!({ "keys": [] })), act(11, ENGINE, "Ori › Taldo › engine › part", "seal", json!({}), whole('b')), act(12, "Ori", "Ori", "be", json!({}), json!({ "keep_deleted": 1000 })), act(13, "Ori › Taldo", ENGINE, "be", json!({}), json!({ "keys": [] }))]);
     assert!(t.rejected.is_empty(), "{:?}", t.rejected);
 }
+
+// NOT TAKEN OVER: a node with something above it is never taken over, nor granted to be — who it is comes from above
+#[test]
+fn only_a_person_is_taken_over() {
+    for (g, is, value) in [(10, "takeover", json!({ "keys": [] })), (11, "grant", json!({ "to": "Ori", "action": "take over" }))] {
+        let t = with(&[act(g, ENGINE, ENGINE, is, json!({}), value)]);
+        assert_eq!(why(&t, g), format!("{ENGINE} is not a person: who it is is set from above it, never taken over"), "{is}");
+    }
+}
