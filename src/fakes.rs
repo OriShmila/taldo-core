@@ -103,6 +103,10 @@ impl FakeStore {
     pub fn put_row(&self, row: serde_json::Value) {
         self.rows.lock().unwrap().insert(row["g"].as_i64().expect("a row with its number"), row);
     }
+    /// A ROW TAKEN AWAY BY HAND, as someone with the store's file could
+    pub fn drop_row(&self, g: i64) {
+        self.rows.lock().unwrap().remove(&g);
+    }
 }
 impl Store for FakeStore {
     fn lease(&self, holder: &str) -> Answer<()> {

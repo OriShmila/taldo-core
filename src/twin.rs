@@ -323,6 +323,17 @@ fn said_who(mut w: Map<String, Value>, e: &Value) -> Map<String, Value> {
     }
     w
 }
+/// THE LINE A ROW HOLDS: the row without what keeping adds to it (`arrived`, its `salt`, its `mark`) — the one answer to it, so a
+/// store holds a row marked to the line it kept
+pub fn line_of(row: &Value) -> Value {
+    let mut l = row.clone();
+    if let Some(o) = l.as_object_mut() {
+        for k in ["arrived", "salt", "mark"] {
+            o.remove(k);
+        }
+    }
+    l
+}
 /// AN ENTRY AS IT IS KEPT: its row, carrying — outside what its writer signed — when it arrived (the receiver's time, the one time every
 /// rule reads). Nothing else is added to a line, and no line is changed once kept
 pub fn kept(e: &Value, arrived: i64) -> Value {
@@ -938,9 +949,16 @@ impl Twin {
         let mut mark = mark_of(&row, &signed, &self.head, marker, made, &erased);
         mark["sig"] = sign(mark_bytes(&mark).as_bytes()).map_err(refused)?;
         row["mark"] = mark;
-        self.head = mark_hash(&row["mark"]);
-        self.last = g;
-        self.land_line(&row, signed.present, arrived);
+        let mut after = self.clone();
+        after.head = mark_hash(&row["mark"]);
+        after.last = g;
+        after.land_line(&row, signed.present, arrived);
+        // NOTHING KEPT THAT TALDO COULD NOT MARK AFTER IT: once the record has its Taldo, a line that leaves it none to mark with —
+        // its Taldo deleted or blocked, or a node above it — is never kept: every line after it would never be read
+        if self.record_taldo().is_some() && after.marking_keys().is_empty() {
+            return Err(json!({ "g": e["g"], "why": "after it, the record's Taldo could not mark it: Taldo is never deleted or blocked out from under its record" }));
+        }
+        *self = after;
         Ok(Taken { row, erased, signed })
     }
     /// ONE KEPT ROW READ: its mark checked (`refold`), and the line landed as it was taken — or why the row is not what was kept

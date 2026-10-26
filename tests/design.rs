@@ -847,9 +847,12 @@ fn only_the_records_taldo_marks_it_and_never_while_blocked() {
     m["by"] = json!("Eve › T");
     rows[2]["mark"] = m;
     assert!(Twin::refold(store_of(&rows)).is_err(), "a mark by a Taldo not the record's was read");
-    // after Taldo is blocked, nothing it marks is read
-    let (store, _) = kept_record(vec![first_key(ORI), taldo(1, ORI), act(2, ORI, TALDO_NODE, "block", json!({}), json!({})), act(3, ORI, ORI, "be", json!({}), json!({ "name": "after the block" }))]);
-    assert!(Twin::refold(store).is_err(), "a line marked by a blocked Taldo was read");
+    // TALDO IS NEVER BLOCKED OR DELETED OUT FROM UNDER ITS RECORD: such a line is not kept
+    let (store, mut t) = kept_record(vec![first_key(ORI), act(1, ORI, ORI, "be", json!({}), json!({ "keep_deleted": 10 })), taldo(2, ORI)]);
+    assert!(keep(&store, &mut t, act(3, ORI, TALDO_NODE, "block", json!({}), json!({}))).is_err(), "Taldo was blocked out from under its record");
+    assert!(keep(&store, &mut t, act(3, ORI, TALDO_NODE, "delete", json!({}), json!({}))).is_err(), "Taldo was deleted out from under its record");
+    keep(&store, &mut t, act(3, ORI, ORI, "be", json!({}), json!({ "name": "still read" }))).unwrap();
+    Twin::refold(store).unwrap_or_else(|w| panic!("{w}"));
 }
 const TALDO_NODE: &str = common::TALDO;
 
@@ -870,4 +873,15 @@ fn a_line_taken_out_by_many_is_out_while_any_counts() {
     let (store, t) = kept_record(lines);
     assert_eq!(t.name(ORI), None);
     same_after_restart(&store, &t);
+}
+
+#[test]
+fn a_row_taken_away_after_it_was_read_is_never_read_as_not_there() {
+    let (store, _) = kept_record(vec![first_key(ORI), taldo(1, ORI), make(2, ORI, "D", ORI, "device"), act(3, ORI, "D", "block", json!({}), json!({})), act(4, ORI, ORI, "be", json!({}), json!({ "name": "Ori" }))]);
+    let t = Twin::refold(store.clone()).unwrap();
+    store.drop_row(3);
+    let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| t.blocked("D")));
+    assert!(read.is_err(), "a block taken away from the store was read as never written");
+    let walked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| t.entries.iter().count()));
+    assert!(walked.is_err(), "the entries walked passed over a row taken away");
 }

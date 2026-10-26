@@ -326,7 +326,7 @@ impl Entries {
         if let Some(v) = self.hand.lock().unwrap_or_else(|x| x.into_inner()).get(*g) {
             return Some(v);
         }
-        let v = Arc::new(self.held(*g, src.entry(*g)?));
+        let v = Arc::new(self.held(*g, src.entry(*g)));
         self.hand
             .lock()
             .unwrap_or_else(|x| x.into_inner())
@@ -334,7 +334,9 @@ impl Entries {
         Some(v)
     }
     /// A ROW READ AGAIN FROM THE SOURCE, held to the row the twin took or read: the same, or nothing runs on
-    fn held(&self, g: i64, row: Value) -> Value {
+    /// — a row gone from the store is a row changed: the record is not what was kept
+    fn held(&self, g: i64, row: Option<Value>) -> Value {
+        let row = row.unwrap_or_else(|| panic!("row {g} of the record is gone from the store: the record is not what Taldo read"));
         if let Some(h) = self.hashes.get(&g) {
             assert!(*h == row_hash(&row), "row {g} of the record is not the row Taldo read: it was changed in the store");
         }
@@ -440,8 +442,12 @@ impl Iter<'_> {
                 (None, _) => (lo, hi),
             };
             // AS `get` READS THEM: an entry taken and not kept yet from its own home first, else its row
-            let mut span: BTreeMap<i64, Arc<Value>> = rows.into_iter().filter(|(g, _)| es.contains_key(g)).map(|(g, v)| (g, Arc::new(es.held(g, v)))).collect();
+            let mut span: BTreeMap<i64, Arc<Value>> = rows.into_iter().filter(|(g, _)| es.contains_key(g)).map(|(g, v)| (g, Arc::new(es.held(g, Some(v))))).collect();
             span.extend(es.pending.range(from..=to).map(|(g, v)| (*g, v.clone())));
+            // EVERY ENTRY IN THE SPAN READ: one the twin counts that no row holds is gone from the store
+            if let Some(g) = (from.max(0)..=to.min(es.top)).find(|g| es.contains_key(g) && !span.contains_key(g)) {
+                es.held(g, None);
+            }
             let mut out: Vec<(i64, Arc<Value>)> = span.into_iter().filter(|(g, _)| es.contains_key(g)).collect();
             if newest_first {
                 out.reverse();
