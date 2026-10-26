@@ -304,8 +304,9 @@ impl Twin {
         t.entries.set_indexes(with);
         // ROWS KEPT AFTER THE STATE: every one read on it as any row is (`Twin::read`), so a state behind its rows never reads the
         // record short
-        let mut reading = crate::twin::Reading::default();
-        let mut from = t.entries.top().max(t.taken_out.keys().next_back().copied().unwrap_or(0)) + 1;
+        let last = t.entries.top().max(t.taken_out.keys().next_back().copied().unwrap_or(0));
+        let mut reading = crate::twin::Reading::after(last);
+        let mut from = last + 1;
         loop {
             let page = source.page(from, i64::MAX, false, 1024);
             let Some(last) = page.last().map(|(g, _)| *g) else { break };

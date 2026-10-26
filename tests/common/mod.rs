@@ -116,7 +116,7 @@ pub fn keep(store: &taldo_core::fakes::FakeStore, t: &mut taldo_core::twin::Twin
     let a = e["arrived"].as_i64().unwrap();
     let erased = t.erased_rows(&e);
     let mut next = t.clone();
-    let (row, _) = next.take(&e, a, TALDO, &mark_sign)?;
+    let (row, _) = next.take(&e, a, TALDO, t.entries.top().max(-1), &mark_sign)?;
     store.keep("k", &[row], &erased, &next.snapshot()).unwrap();
     next.rows_kept();
     *t = next;

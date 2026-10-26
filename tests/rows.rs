@@ -56,7 +56,7 @@ impl Rows {
 /// AN ENTRY IN, as a program keeps rows: checked, written as its row only when taken, then landed
 fn take(t: &mut Twin, rows: &Rows, e: &Value, arrived: i64) {
     // kept as the keeper keeps it: marked, with when it arrived
-    match t.take(e, arrived, common::TALDO, &common::mark_sign) {
+    match { let made = t.entries.top(); t.take(e, arrived, common::TALDO, made, &common::mark_sign) } {
         Ok((row, _)) => rows.put(&row),
         Err(why) => t.rejected.push_back(why),
     }

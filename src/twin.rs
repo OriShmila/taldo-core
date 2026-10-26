@@ -183,12 +183,22 @@ impl Twin {
 
 /// WHAT A READING OF ROWS STILL OWES: marks made before their Taldo's node was (checked once it is), and rows erased whose purge
 /// is still to come
-#[derive(Default)]
 pub(crate) struct Reading {
     early: Vec<Value>,
     erased: BTreeMap<i64, i64>,
+    /// the last line read
+    last: i64,
+}
+impl Default for Reading {
+    fn default() -> Self {
+        Reading { early: vec![], erased: BTreeMap::new(), last: -1 }
+    }
 }
 impl Reading {
+    /// reading on from line `last`, read already (a state caught up)
+    pub(crate) fn after(last: i64) -> Reading {
+        Reading { last, ..Default::default() }
+    }
     pub(crate) fn done(self) -> Result<(), String> {
         if let Some(m) = self.early.first() {
             return Err(format!("#{}'s mark is by {}, which never was a Taldo of the record's person", m["g"], m["by"]));
@@ -365,9 +375,10 @@ fn line_hash(e: &Value) -> String {
     sha(&format!("{}\n{sig}", crate::identity::signed_bytes(e)))
 }
 /// THE MARK, before Taldo signs it: which line (its number and fingerprint), when it arrived, who signed it with which key and
-/// whether a person was there — as admission found it — chained to the mark before (`prev`), by which Taldo (`by`)
-fn mark_of(row: &Value, signed: &crate::identity::Signed, prev: &str, by: &str) -> Value {
-    json!({ "g": row["g"], "line": line_hash(row), "arrived": row["arrived"], "signer": signed.signer, "key": signed.key, "present": signed.present, "prev": prev, "by": by })
+/// whether a person was there — as admission found it — chained to the mark before (`prev`), by which Taldo (`by`), made when the
+/// record's last line was `made`: its key is one that Taldo had then
+fn mark_of(row: &Value, signed: &crate::identity::Signed, prev: &str, by: &str, made: i64) -> Value {
+    json!({ "g": row["g"], "line": line_hash(row), "arrived": row["arrived"], "signer": signed.signer, "key": signed.key, "present": signed.present, "prev": prev, "by": by, "made": made })
 }
 /// WHAT TALDO SIGNS OF A MARK: the mark without its signature, in one spelling
 pub fn mark_bytes(mark: &Value) -> String {
@@ -874,11 +885,12 @@ impl Twin {
     }
     /// A LINE TAKEN, AS ITS KEEPER TAKES IT: judged once (`admit`), marked — Taldo's word of what admission found, signed by `sign` as
     /// the Taldo `marker`, chained to the mark before — and landed. The row to keep, and what admission found; or why not, and this
-    /// twin as it was. A purge's keeper puts `erased_rows` in place of the rows it erases, in the same keep
-    pub fn take(&mut self, e: &Value, arrived: i64, marker: &str, sign: &dyn Fn(&[u8]) -> Result<Value, String>) -> Result<(Value, crate::identity::Signed), Value> {
+    /// twin as it was. A purge's keeper puts `erased_rows` in place of the rows it erases, in the same keep. `made`: the record's last
+    /// line when the mark is made — the line before this one as it arrives; a record marked once after it was kept, its last
+    pub fn take(&mut self, e: &Value, arrived: i64, marker: &str, made: i64, sign: &dyn Fn(&[u8]) -> Result<Value, String>) -> Result<(Value, crate::identity::Signed), Value> {
         let signed = self.admit(e, arrived)?;
         let mut row = kept(e, arrived);
-        let mut mark = mark_of(&row, &signed, &self.head, marker);
+        let mut mark = mark_of(&row, &signed, &self.head, marker, made);
         mark["sig"] = sign(mark_bytes(&mark).as_bytes()).map_err(|why| json!({ "g": e["g"], "why": format!("Taldo could not mark it: {why}") }))?;
         row["mark"] = mark;
         self.head = mark_hash(&row["mark"]);
@@ -915,14 +927,18 @@ impl Twin {
                 }
             }
         }
-        // MARKED BY A TALDO OF THE RECORD'S PERSON, with a key it has as the line arrives — a mark made before that Taldo's node was
-        // (the record's first lines) waits for it
+        // MARKED BY A TALDO OF THE RECORD'S PERSON, with a key it had when the mark was made (`made`) — a mark waits until the rows
+        // read reach that line
+        if m["made"].as_i64().is_none() {
+            return Err(why("its mark says not when it was made"));
+        }
         reading.early.push(m.clone());
         self.marks_hold(reading)?;
         let present = m["present"].as_bool().ok_or_else(|| why("its mark says not whether a person was there"))?;
         let arrived = row["arrived"].as_i64().ok_or_else(|| why("it says no time it arrived"))?;
         self.land_line(row, present, arrived);
         self.head = mark_hash(m);
+        reading.last = g;
         self.marks_hold(reading)?;
         // A PURGE READ: every line it names is erased, by it — its row holds no word
         for x in Self::lines_named(row).into_iter().filter(|_| row["is"] == "purge") {
@@ -934,11 +950,13 @@ impl Twin {
         }
         Ok(())
     }
-    /// THE MARKS WAITING, CHECKED where their Taldo's node now is: a node of kind taldo under the record's person, and a key it has
+    /// THE MARKS WAITING, CHECKED once the rows read reach the line each was made at (`made`): by a node of kind taldo under the
+    /// record's person, with a key it had then
     fn marks_hold(&self, reading: &mut Reading) -> Result<(), String> {
         for m in std::mem::take(&mut reading.early) {
             let by = id_of(&m["by"]);
-            let Some(n) = self.nodes.get(&by) else {
+            let made = m["made"].as_i64().unwrap_or(i64::MAX);
+            let Some(n) = self.nodes.get(&by).filter(|_| made <= reading.last) else {
                 reading.early.push(m);
                 continue;
             };

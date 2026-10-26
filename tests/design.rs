@@ -510,7 +510,7 @@ fn an_entry_taken_and_not_kept_yet_reads_alike_by_number_and_walked() {
     for e in [first_key(ORI), act(1, ORI, ORI, "be", json!({}), json!({ "n": 1 }))] {
         let mut e = e;
         arrives(&mut e);
-        t.take(&e, e["arrived"].as_i64().unwrap(), TALDO, &mark_sign).unwrap();
+        { let made = t.entries.top(); t.take(&e, e["arrived"].as_i64().unwrap(), common::TALDO, made, &mark_sign) }.unwrap();
     }
     assert!(t.entries.get(&1).is_some());
     assert_eq!(t.entries.iter().map(|(g, _)| g).collect::<Vec<_>>(), vec![0, 1], "walked, what is taken and not kept is missing");
@@ -709,4 +709,54 @@ fn take_outs_and_purges_interleaved_read_again_the_same() {
     keep(&store, &mut t, act(12, ORI, "P", "be", json!({}), json!({ "name": "good" }))).unwrap();
     let restored = Twin::restore(&state, store.clone()).unwrap_or_else(|w| panic!("{w}"));
     assert_eq!(restored.name("P").as_deref(), Some("good"));
+}
+
+#[test]
+fn a_mark_is_checked_against_the_key_its_taldo_had_when_it_was_made() {
+    // Taldo's key changes midway; and a record kept before marks is marked once, at its end, with Taldo's key then
+    let lines = vec![
+        first_key(ORI),
+        taldo(1, ORI),
+        make(2, ORI, "P", ORI, "thing"),
+        act(3, ORI, common::TALDO, "be", json!({}), json!({ "keys": [{ "key": public("Taldo 2") }] })),
+        act(4, ORI, "P", "be", json!({}), json!({ "name": "Pat" })),
+    ];
+    let sign2 = |b: &[u8]| -> Result<Value, String> {
+        use p256::ecdsa::signature::Signer;
+        let s: p256::ecdsa::Signature = key_of("Taldo 2").sign(b);
+        Ok(json!({ "key": public("Taldo 2"), "sig": s.to_bytes().iter().map(|x| format!("{x:02x}")).collect::<String>() }))
+    };
+    // LINE BY LINE: each mark made with the key Taldo has as it arrives
+    let kept = store();
+    let mut t = Twin::stored(kept.clone());
+    for e in lines.iter().cloned() {
+        let mut e = e;
+        arrives(&mut e);
+        let a = e["arrived"].as_i64().unwrap();
+        let made = t.entries.top();
+        let (row, _) = if made >= 3 { t.take(&e, a, common::TALDO, made, &sign2) } else { t.take(&e, a, common::TALDO, made, &mark_sign) }.unwrap();
+        taldo_core::seams::Store::keep(&*kept, "k", &[row], &[], b"").unwrap();
+    }
+    Twin::refold(kept.clone()).unwrap_or_else(|w| panic!("a record whose Taldo's key changed does not read: {w}"));
+    // MARKED ONCE, AT ITS END: every mark made with the key Taldo has then
+    let once = store_of(&[]);
+    let mut t = Twin::default();
+    for e in lines.iter().cloned() {
+        let mut e = e;
+        arrives(&mut e);
+        let (row, _) = t.take(&e, e["arrived"].as_i64().unwrap(), common::TALDO, 4, &sign2).unwrap();
+        taldo_core::seams::Store::keep(&*once, "k", &[row], &[], b"").unwrap();
+    }
+    Twin::refold(once).unwrap_or_else(|w| panic!("a record marked once at its end does not read: {w}"));
+    // a mark made with the old key after the key changed is not Taldo's
+    let late = store();
+    let mut t = Twin::stored(late.clone());
+    for e in lines.iter().cloned() {
+        let mut e = e;
+        arrives(&mut e);
+        let made = t.entries.top();
+        let (row, _) = t.take(&e, e["arrived"].as_i64().unwrap(), common::TALDO, made, &mark_sign).unwrap();
+        taldo_core::seams::Store::keep(&*late, "k", &[row], &[], b"").unwrap();
+    }
+    assert!(Twin::refold(late).is_err(), "a mark by Taldo's old key, made after the key changed, was read");
 }
