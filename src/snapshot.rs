@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 use imbl::{OrdMap, Vector};
 use std::sync::Arc;
 
-const MAGIC: &[u8] = b"taldo twin state 11\n";
+const MAGIC: &[u8] = b"taldo twin state 12\n";
 
 struct W(Vec<u8>);
 impl W {
@@ -162,6 +162,12 @@ impl Twin {
         for x in &self.erased {
             w.s(x);
         }
+        w.u(self.stopped.len() as u64);
+        for (g, (by, l)) in &self.stopped {
+            w.i(*g);
+            w.i(*by);
+            w.json(l);
+        }
         let (names, kinds) = self.entries.kinds();
         w.u(names.len() as u64);
         for n in names {
@@ -261,6 +267,11 @@ impl Twin {
         t.present = r.gs()?.into_iter().collect();
         // what was erased, kept in its standard spelling
         t.erased = (0..r.n()?).map(|_| r.s()).collect::<Result<_, _>>()?;
+        // the lines taken out, each with what took it out and what stays of it
+        for _ in 0..r.n()? {
+            let g = r.i()?;
+            t.stopped.insert(g, (r.i()?, r.json()?));
+        }
         let names: Vec<String> = (0..r.n()?).map(|_| r.s()).collect::<Result<_, _>>()?;
         let len = r.n()?;
         let mut kinds: Vec<u32> = Vec::with_capacity(len.min(1 << 26));
@@ -292,7 +303,7 @@ impl Twin {
             }
             from = last + 1;
         }
-        t.read_from_rows();
+        t.entries.rows_kept();
         if t.rejected.len() > refused {
             return Err(format!("rows kept after the state are refused: {:?}", t.rejected.iter().skip(refused).take(5).collect::<Vec<_>>()));
         }

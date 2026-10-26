@@ -114,7 +114,7 @@ impl Store for FakeStore {
         *self.holder.lock().unwrap() = None;
         done(())
     }
-    fn keep(&self, holder: &str, entries: &[serde_json::Value], replaced: &[serde_json::Value], state: &[u8]) -> Answer<i64> {
+    fn keep(&self, holder: &str, entries: &[serde_json::Value], forget: &[i64], state: &[u8]) -> Answer<i64> {
         self.holds(holder, "keep")?;
         let mut rows = self.rows.lock().unwrap();
         let mut top = rows.keys().last().copied().unwrap_or(i64::MIN);
@@ -125,11 +125,14 @@ impl Store for FakeStore {
             }
             top = g;
         }
-        if let Some(e) = replaced.iter().find(|e| e["g"].as_i64().is_none_or(|g| !rows.contains_key(&g))) {
-            return fail("store", "keep", format!("no row kept as {} to replace", e["g"]));
+        if let Some(g) = forget.iter().find(|g| !rows.contains_key(g)) {
+            return fail("store", "keep", format!("no row kept as {g} to forget"));
         }
-        for e in entries.iter().chain(replaced) {
+        for e in entries {
             rows.insert(e["g"].as_i64().expect("checked"), e.clone());
+        }
+        for g in forget {
+            rows.remove(g);
         }
         *self.state.lock().unwrap() = Some(state.to_vec());
         done(top)

@@ -69,7 +69,6 @@ pub fn store(s: &dyn Store) -> Result<(), String> {
         s.to_bytes().iter().map(|x| format!("{x:02X}")).collect()
     };
     let e = |g: i64| serde_json::json!({ "g": g, "is": "be", "sig": { "sig": sig(g) }, "value": { "n": g } });
-    let erased = |g: i64| serde_json::json!({ "g": g, "is": "erased", "value": {} });
     refused(s.keep("a", &[e(1)], &[], b"s"), "keeping with no lease")?;
     ok(s.lease("a"), "take the lease")?;
     ok(s.lease("a"), "the same holder taking it again")?;
@@ -92,21 +91,14 @@ pub fn store(s: &dyn Store) -> Result<(), String> {
     if s.signed(&standard) != Some(2) || s.signed(&crate::identity::canonical_sig(&sig(3)).expect("a signature")).is_some() {
         return Err("an entry was not found by its signature's standard spelling (identity::canonical_sig)".into());
     }
-    // ALL OR NONE: an erase of a row never kept refuses the whole keep — the entry with it is not kept either
-    refused(s.keep("a", &[e(6)], &[erased(3)], b"state 4"), "erasing a row never kept")?;
+    // ALL OR NONE: forgetting a row never kept refuses the whole keep — the entry with it is not kept either
+    refused(s.keep("a", &[e(6)], &[3], b"state 4"), "forgetting a row never kept")?;
     if s.entry(6).is_some() || ok(s.state(), "read the state")?.as_deref() != Some(&b"state 2"[..]) {
         return Err("a keep refused kept part of itself".into());
     }
-    ok(s.keep("a", &[e(6)], &[erased(2)], b"state 5"), "keep a purge with what it erases")?;
-    if s.entry(2) != Some(erased(2)) || s.signed(&standard).is_some() || s.entry(6) != Some(e(6)) {
-        return Err("an erased row still reads as it was, or is still found by its signature".into());
-    }
-    // A ROW REPLACED BY ITSELF, STAMPED: read as it is now, found by its own signature still
-    let mut stamped = e(5);
-    stamped["signer"] = serde_json::json!("a");
-    ok(s.keep("a", &[], &[stamped.clone()], b"state 6"), "replace a row with itself, stamped")?;
-    if s.entry(5) != Some(stamped) || s.signed(&crate::identity::canonical_sig(&sig(5)).expect("a signature")) != Some(5) {
-        return Err("a row replaced by itself, stamped, does not read so, or is not found by its signature".into());
+    ok(s.keep("a", &[e(6)], &[2], b"state 5"), "keep a purge with the rows it erases forgotten")?;
+    if s.entry(2).is_some() || s.signed(&standard).is_some() || s.entry(6) != Some(e(6)) || gs(s.page(1, 6, false, 10)) != vec![1, 5, 6] {
+        return Err("a forgotten row still reads, is walked, or is found by its signature".into());
     }
     refused(s.release("b"), "releasing a lease one does not hold")?;
     ok(s.release("a"), "release")?;
