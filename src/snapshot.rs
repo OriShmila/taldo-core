@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 use imbl::{OrdMap, Vector};
 use std::sync::Arc;
 
-const MAGIC: &[u8] = b"taldo twin state 10\n";
+const MAGIC: &[u8] = b"taldo twin state 11\n";
 
 struct W(Vec<u8>);
 impl W {
@@ -158,11 +158,6 @@ impl Twin {
             w.gs(l.iter());
         }
         w.gs(self.present.iter());
-        w.u(self.signers.len() as u64);
-        for (g, s) in &self.signers {
-            w.i(*g);
-            w.s(s);
-        }
         w.u(self.erased.len() as u64);
         for x in &self.erased {
             w.s(x);
@@ -264,10 +259,6 @@ impl Twin {
             t.rewritten.insert(g, r.gs()?);
         }
         t.present = r.gs()?.into_iter().collect();
-        for _ in 0..r.n()? {
-            let g = r.i()?;
-            t.signers.insert(g, r.s()?);
-        }
         // what was erased, kept in its standard spelling
         t.erased = (0..r.n()?).map(|_| r.s()).collect::<Result<_, _>>()?;
         let names: Vec<String> = (0..r.n()?).map(|_| r.s()).collect::<Result<_, _>>()?;

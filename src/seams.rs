@@ -132,11 +132,11 @@ pub trait Store: crate::rows::Source {
     fn lease(&self, holder: &str) -> Answer<()>;
     /// give it up: refused when `holder` does not hold it
     fn release(&self, holder: &str) -> Answer<()>;
-    /// KEEP, AS ONE — all of it, or none: entries the twin took, as rows by their number (`g`), each above every row kept; rows a purge
-    /// erased, each replaced by what stays of it (`twin::erased_row`), found by its signature no more; and the twin's state after them
-    /// — as the lease's holder; refused for anyone else, for an entry not above every row, and for an erased row never kept. The
-    /// number of the last row kept
-    fn keep(&self, holder: &str, entries: &[serde_json::Value], erased: &[serde_json::Value], state: &[u8]) -> Answer<i64>;
+    /// KEEP, AS ONE — all of it, or none: entries the twin took, as rows by their number (`g`), each above every row kept; rows the twin
+    /// owes (`Twin::owed_rows`), each put in place of the row of its number — found by its own signature, or by none (what stays of an
+    /// erased entry); and the twin's state after them — as the lease's holder; refused for anyone else, for an entry not above every
+    /// row, and for a row owed in place of none kept. The number of the last row kept
+    fn keep(&self, holder: &str, entries: &[serde_json::Value], replaced: &[serde_json::Value], state: &[u8]) -> Answer<i64>;
     /// the twin's state written last, whole
     fn state(&self) -> Answer<Option<Vec<u8>>>;
 }

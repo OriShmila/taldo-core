@@ -56,8 +56,9 @@ impl Rows {
 /// AN ENTRY IN, as a program keeps rows: checked, written as its row only when taken, then landed
 fn take(t: &mut Twin, rows: &Rows, e: &Value, arrived: i64) {
     match t.admit(e, arrived) {
+        // kept as the keeper keeps it: with when it arrived and the verdict it was taken with
         Ok(present) => {
-            rows.put(e);
+            rows.put(&taldo_core::twin::kept(e, arrived, &present));
             t.land(e, &present, arrived);
         }
         Err(why) => t.rejected.push_back(why),
@@ -313,7 +314,11 @@ fn an_overlay_of_rows_keeps_every_entry_it_took() {
     assert!(o.rejected.len() == base.rejected.len(), "every step is taken: {:?}", o.rejected.iter().last());
     for e in &more {
         let g = e["g"].as_i64().unwrap();
-        assert_eq!(*o.entries.get(&g).expect("an overlay's entry read back"), *e);
+        let got = o.entries.get(&g).expect("an overlay's entry read back");
+        let mut as_taken = (*got).clone();
+        assert!(as_taken["signer"].is_string() && as_taken["present"].is_boolean(), "an overlay's entry keeps no verdict");
+        as_taken.as_object_mut().unwrap().retain(|k, _| k != "signer" && k != "present");
+        assert_eq!(as_taken, *e);
     }
     assert_eq!(o.entries.iter().count(), base.entries.iter().count() + more.len());
     assert_eq!(o.entries.iter().rev().count(), base.entries.iter().count() + more.len());

@@ -124,9 +124,7 @@ pub struct Twin {
     pub(crate) present: OrdSet<i64>,
     /// the signatures of every act a purge erased, in their standard spelling: never taken again
     pub(crate) erased: OrdSet<String>,
-    /// WHO SIGNED EACH ENTRY, as admission found it (`identity::Signed`): the node whose key it was
-    pub(crate) signers: OrdMap<i64, String>,
-    /// ROWS OWED THEIR ERASING: what stays of each entry a purge erased here, until its keeper replaced the rows (`rows_kept`)
+    /// ROWS OWED TO THE KEEPER (`owed_rows`), until it replaced them (`rows_kept`)
     owed: Vector<Value>,
 }
 
@@ -263,12 +261,19 @@ fn said_who(mut w: Map<String, Value>, e: &Value) -> Map<String, Value> {
     }
     w
 }
-/// AN ENTRY AS IT IS KEPT: its row, carrying when it arrived — the receiver's time, outside what its writer signed, the one time every
-/// rule reads. The one place an entry is stamped: the store keeps this row, and the twin lands it
-pub fn kept(e: &Value, arrived: i64) -> Value {
+/// AN ENTRY AS IT IS KEPT: its row, carrying — outside what its writer signed — when it arrived (the receiver's time, the one time every
+/// rule reads) and the verdict it was taken with (`signer`: the node whose key signed it; `present`: whether a person was there). The
+/// one place an entry is stamped: the store keeps this row, and every fold lands it as taken — judged once, when it arrived
+pub fn kept(e: &Value, arrived: i64, signed: &crate::identity::Signed) -> Value {
     let mut row = e.clone();
     row["arrived"] = json!(arrived);
+    row["signer"] = json!(signed.signer);
+    row["present"] = json!(signed.present);
     row
+}
+/// THE VERDICT A ROW WAS TAKEN WITH, as it keeps it — none for a row kept before rows kept their verdict
+fn verdict(row: &Value) -> Option<crate::identity::Signed> {
+    Some(crate::identity::Signed { signer: row["signer"].as_str()?.to_string(), present: row["present"].as_bool()? })
 }
 /// WHOSE ANSWER COUNTS, for an answer the table names: by the answered entry's writer or a node above it; at the answered entry's
 /// node or above it; only the one a way in names (`as`); or anyone's
@@ -427,9 +432,10 @@ impl Twin {
         out.sort();
         out
     }
-    /// THE ROWS OWED THEIR ERASING: what stays of each entry a purge erased, for the keeper to put in place of its row — with the purge,
-    /// as one keep; or, for a record read with a purge whose rows were not replaced yet, before anything else
-    pub fn owed_erasure(&self) -> Vec<Value> {
+    /// THE ROWS OWED TO THE KEEPER, each to put in place of the row of its number: what stays of each entry a purge erased (with the
+    /// purge, as one keep), and a row kept before rows kept their verdict, stamped with it (`kept`) — owed once, from the fold that
+    /// judged it, before anything else
+    pub fn owed_rows(&self) -> Vec<Value> {
         self.owed.iter().cloned().collect()
     }
     /// FOLDED FROM ITS ROWS: what it read is kept already — but what stays of each entry a purge in them erased, owed its erasing, is
@@ -452,18 +458,9 @@ impl Twin {
             Some(src) => Twin::stored(src.clone()),
             None => Twin::default(),
         };
+        // the one fold: each row as kept, its verdict with it
         for g in self.entries.keys().collect::<Vec<_>>() {
-            let e = match stubs.get(&g) {
-                Some(r) => (*r).clone(),
-                None => (*self.e(g)).clone(),
-            };
-            if e["is"] == "erased" {
-                t.apply(&e);
-                continue;
-            }
-            let signed = crate::identity::Signed { signer: self.signers.get(&g).cloned().expect("admission recorded who signed each entry taken"), present: self.present.contains(&g) };
-            let arrived = e["arrived"].as_i64().expect("an entry taken carries when it arrived");
-            t.land(&e, &signed, arrived);
+            t.apply(&stubs.get(&g).map_or_else(|| (*self.e(g)).clone(), |r| (*r).clone()));
         }
         t
     }
@@ -770,12 +767,24 @@ impl Twin {
             return BTreeSet::from([at]);
         }
         // WHEN IT ARRIVED is the receiver's, kept with its row (`arrived`) — never the time its writer wrote in it
-        match e["arrived"].as_i64() {
-            Some(arrived) => self.apply_arrived(e, arrived),
-            None => {
-                self.rejected.push_back(json!({ "g": e["g"], "why": "its row says no time it arrived" }));
-                BTreeSet::new()
-            }
+        let Some(arrived) = e["arrived"].as_i64() else {
+            self.rejected.push_back(json!({ "g": e["g"], "why": "its row says no time it arrived" }));
+            return BTreeSet::new();
+        };
+        // TAKEN ONCE, NEVER JUDGED AGAIN: a row lands with the verdict it was taken with. One kept before rows kept their verdict is
+        // judged this once, and its row, stamped, is owed to its keeper (`owed_rows`) — so the next fold lands it as taken too
+        match verdict(e) {
+            Some(signed) => self.land(e, &signed, arrived),
+            None => match self.admit(e, arrived) {
+                Ok(signed) => {
+                    self.owed.push_back(kept(e, arrived, &signed));
+                    self.land(e, &signed, arrived)
+                }
+                Err(why) => {
+                    self.rejected.push_back(why);
+                    BTreeSet::new()
+                }
+            },
         }
     }
     /// ONE ENTRY LANDS, arrived at `arrived` (ms, the receiver's clock): taken, or kept among the rejected with why
@@ -1075,7 +1084,7 @@ impl Twin {
         let present = signed.present;
         // WHAT A NEW PURGE ERASES — none for one whose rows were erased already (a record folded again)
         let erasing = if e["is"] == "purge" { self.erases(e) } else { vec![] };
-        let e = &kept(e, arrived);
+        let e = &kept(e, arrived, signed);
         let mut touched = BTreeSet::new();
         if self.entries.source().is_none() || self.entries.is_overlay() {
             if let Some(s) = e["sig"]["sig"].as_str().and_then(crate::identity::canonical_sig) {
@@ -1087,7 +1096,6 @@ impl Twin {
         if present {
             self.present.insert(g);
         }
-        self.signers.insert(g, signed.signer.clone());
         // A NODE COMES TO BE: a person by its first key, anything else by its make, under its parent
         if !self.nodes.contains_key(&at) {
             let parent = (e["is"] == "make").then(|| id_of(&e["refs"]["in"]));

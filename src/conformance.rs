@@ -101,6 +101,13 @@ pub fn store(s: &dyn Store) -> Result<(), String> {
     if s.entry(2) != Some(erased(2)) || s.signed(&standard).is_some() || s.entry(6) != Some(e(6)) {
         return Err("an erased row still reads as it was, or is still found by its signature".into());
     }
+    // A ROW REPLACED BY ITSELF, STAMPED: read as it is now, found by its own signature still
+    let mut stamped = e(5);
+    stamped["signer"] = serde_json::json!("a");
+    ok(s.keep("a", &[], &[stamped.clone()], b"state 6"), "replace a row with itself, stamped")?;
+    if s.entry(5) != Some(stamped) || s.signed(&crate::identity::canonical_sig(&sig(5)).expect("a signature")) != Some(5) {
+        return Err("a row replaced by itself, stamped, does not read so, or is not found by its signature".into());
+    }
     refused(s.release("b"), "releasing a lease one does not hold")?;
     ok(s.release("a"), "release")?;
     ok(s.lease("b"), "a new writer after release")?;

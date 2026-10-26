@@ -390,7 +390,8 @@ fn a_purge_judges_nothing_again_and_erased_is_written_by_no_one() {
     assert!(t.entries.contains_key(&4) && t.entry(4)["is"] == "grant", "the grant it stood on was erased");
     assert_eq!(t.entry(6)["is"], "erased");
     assert!(t.name("P").is_none() && t.nodes["P"].who["keys"][0]["key"] == public("P"), "what P said stayed, or who P is went");
-    assert_eq!(t.owed_erasure().iter().map(|r| r["g"].as_i64().unwrap()).collect::<Vec<_>>(), vec![6], "the rows owed their erasing are not what the purge erased");
+    // a record written by hand keeps no verdicts: every row is owed its stamp — and the erased one, what stays of it
+    assert_eq!(t.owed_rows().iter().filter(|r| r["is"] == "erased").map(|r| r["g"].as_i64().unwrap()).collect::<Vec<_>>(), vec![6], "the rows owed their erasing are not what the purge erased");
 }
 
 // ─── THE FOURTH REVIEW'S PROBES (26 Oct): one answer to who signs for a node, for entries and requests alike; what stays of an
@@ -482,7 +483,8 @@ fn a_purge_in_a_long_kept_record_lands_before_its_row_is_kept() {
         let s = t.admit(&e, e["arrived"].as_i64().unwrap()).unwrap_or_else(|w| panic!("{w}"));
         let mut next = t.clone();
         next.land(&e, &s, e["arrived"].as_i64().unwrap());
-        store.keep("k", std::slice::from_ref(&e), &next.owed_erasure(), &next.snapshot()).unwrap();
+        let row = taldo_core::twin::kept(&e, e["arrived"].as_i64().unwrap(), &s);
+        store.keep("k", std::slice::from_ref(&row), &next.owed_rows(), &next.snapshot()).unwrap();
         next.rows_kept();
         *t = next;
     };
@@ -497,7 +499,7 @@ fn a_purge_in_a_long_kept_record_lands_before_its_row_is_kept() {
     let mut purge = act(5_004, ORI, "P", "purge", json!({ "re": 5_003 }), json!({ "sigs": sigs }));
     purge["arrived"] = json!(6_000);
     keep(&mut t, purge);
-    assert!(t.entries.contains_key(&5_004) && t.owed_erasure().is_empty());
+    assert!(t.entries.contains_key(&5_004) && t.owed_rows().is_empty());
     assert_eq!(taldo_core::rows::Source::entry(&*store, 4).unwrap()["is"], "erased", "the store still holds what was erased");
     assert_eq!(t.entry(4)["is"], "erased");
     let again = Twin::refold(store.clone());
@@ -553,4 +555,47 @@ fn an_entry_taken_and_not_kept_yet_reads_alike_by_number_and_walked() {
     assert_eq!(t.entries.iter().map(|(g, _)| g).collect::<Vec<_>>(), vec![0, 1], "walked, what is taken and not kept is missing");
     assert_eq!(t.entries.iter().rev().map(|(g, _)| g).collect::<Vec<_>>(), vec![1, 0]);
     assert_eq!(t.entries.having("n"), vec![1], "by a detail, what is taken and not kept is missing");
+}
+
+// ─── A LINE IS JUDGED ONCE, WHEN IT ARRIVES (26 Oct): its row keeps the verdict, and every fold lands it as taken ───
+
+#[test]
+fn an_answer_stays_taken_when_what_it_answered_is_erased() {
+    use taldo_core::seams::Store;
+    // Dana asks; Ori says no; a year later her node is deleted, and erased
+    let store = std::sync::Arc::new(taldo_core::fakes::FakeStore::default());
+    store.lease("k").unwrap();
+    let mut t = Twin::stored(store.clone());
+    let mut keep = |t: &mut Twin, mut e: Value| {
+        arrives(&mut e);
+        let s = t.admit(&e, e["arrived"].as_i64().unwrap()).unwrap_or_else(|w| panic!("{w}"));
+        let mut next = t.clone();
+        next.land(&e, &s, e["arrived"].as_i64().unwrap());
+        let row = taldo_core::twin::kept(&e, e["arrived"].as_i64().unwrap(), &s);
+        store.keep("k", std::slice::from_ref(&row), &next.owed_rows(), &next.snapshot()).unwrap();
+        next.rows_kept();
+        *t = next;
+    };
+    for e in [
+        first_key(ORI),
+        act(1, ORI, ORI, "be", json!({}), json!({ "keep_deleted": 10 })),
+        make(3, ORI, "Dana", ORI, "client"),
+        act(5, "Dana", "Dana", "ask", json!({ "about": "Dana" }), json!({ "label": "go", "moves": [{ "says": "send it", "to": { "sent": true } }] })),
+        act(6, ORI, ORI, "decline", json!({ "re": 5 }), json!({})),
+        act(7, ORI, "Dana", "delete", json!({}), json!({})),
+    ] {
+        keep(&mut t, e);
+    }
+    let sigs: Vec<Value> = t.erasing(7).iter().map(|g| t.entry(*g)["sig"]["sig"].clone()).collect();
+    let mut purge = act(8, ORI, "Dana", "purge", json!({ "re": 7 }), json!({ "sigs": sigs }));
+    purge["arrived"] = json!(100);
+    keep(&mut t, purge);
+    assert!(t.entries.contains_key(&8));
+    // STARTED AGAIN FROM NOTHING BUT ITS ROWS: every line lands as it was taken — none judged again, none refused
+    let again = Twin::refold(store.clone());
+    assert!(again.rejected.is_empty(), "a cold start refused lines taken before: {:?}", again.rejected);
+    assert!(again.owed_rows().is_empty(), "kept rows were owed again: {:?}", again.owed_rows());
+    for k in t.nodes.keys() {
+        assert_eq!((&t.nodes[k].who, &t.nodes[k].value), (&again.nodes[k].who, &again.nodes[k].value), "{k} differs after a cold start");
+    }
 }
