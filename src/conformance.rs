@@ -156,28 +156,28 @@ pub fn run(r: &dyn Run, ends: &dyn Fn(i32) -> Job, killed: &dyn Fn(i32) -> Job, 
 pub fn sandbox(s: &dyn Sandbox, level: &str, given: &serde_json::Value, answers: &str, other: &str, fails: &str) -> Result<(), String> {
     let changed = serde_json::json!({ "changed": {} });
     refused(s.run(level, "a hash that was never sealed", given), "running code it does not have")?;
-    if ok(s.running(level), "running before any")?.is_some() {
+    if ok(s.running(level, given), "running before any")?.is_some() {
         return Err("a level ran before it was given code".into());
     }
     ok(s.run(level, answers, given), "run")?;
-    if ok(s.running(level), "running")?.as_deref() != Some(answers) {
+    if ok(s.running(level, given), "running")?.as_deref() != Some(answers) {
         return Err(format!("{level} does not read as running {answers}"));
     }
-    ok(s.tell(level, &changed), "tell a running level")?;
+    ok(s.tell(level, given, &changed), "tell a running level")?;
     ok(s.run(level, other, given), "run another hash")?;
-    if ok(s.running(level), "running after a replace")?.as_deref() != Some(other) {
+    if ok(s.running(level, given), "running after a replace")?.as_deref() != Some(other) {
         return Err(format!("{level} still runs what it ran before {other}"));
     }
     ok(s.run(level, fails, given), "run code that fails")?;
-    let failed = s.tell(level, &changed);
+    let failed = s.tell(level, given, &changed);
     if failed.as_ref().is_ok_and(|d| d.value["answer"].is_null()) {
         return Err("code that cannot go on was told, and said nothing of it".into());
     }
-    ok(s.stop(level), "stop")?;
-    if ok(s.running(level), "running after stop")?.is_some() {
+    ok(s.stop(level, given), "stop")?;
+    if ok(s.running(level, given), "running after stop")?.is_some() {
         return Err("a stopped level still runs".into());
     }
-    refused(s.tell(level, &changed), "telling a stopped level")?;
+    refused(s.tell(level, given, &changed), "telling a stopped level")?;
     Ok(())
 }
 

@@ -243,6 +243,13 @@ fn said_who(mut w: Map<String, Value>, e: &Value) -> Map<String, Value> {
     }
     w
 }
+/// AN ENTRY AS IT IS KEPT: its row, carrying when it arrived — the receiver's time, outside what its writer signed, the one time every
+/// rule reads. The one place an entry is stamped: the store keeps this row, and the twin lands it
+pub fn kept(e: &Value, arrived: i64) -> Value {
+    let mut row = e.clone();
+    row["arrived"] = json!(arrived);
+    row
+}
 /// WHAT EACH KIND ANSWERS, the one table of it: a kind the core reads as an answer answers only these; any other kind answers any
 /// entry before it, as its writer says
 fn answers(is: &str) -> &'static [&'static str] {
@@ -848,10 +855,7 @@ impl Twin {
     /// AN ENTRY ADMITTED LANDS, arrived at `arrived`: at its node, by its node, naming what it names — returns what it touched. Only
     /// after `admit` took it
     pub fn land(&mut self, e: &Value, present: bool, arrived: i64) -> BTreeSet<String> {
-        // WHEN IT ARRIVED, carried by the entry itself: the one time every rule reads — never its writer's
-        let mut kept = e.clone();
-        kept["arrived"] = json!(arrived);
-        let e = &kept;
+        let e = &kept(e, arrived);
         let mut touched = BTreeSet::new();
         if self.entries.source().is_none() || self.entries.is_overlay() {
             if let Some(s) = e["sig"]["sig"].as_str().and_then(crate::identity::canonical_sig) {

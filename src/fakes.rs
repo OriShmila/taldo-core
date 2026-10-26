@@ -186,20 +186,20 @@ impl Sandbox for FakeSandbox {
         self.levels.lock().unwrap().insert(level.into(), code.into());
         done(())
     }
-    fn tell(&self, level: &str, event: &serde_json::Value) -> Answer<serde_json::Value> {
+    fn tell(&self, level: &str, _given: &serde_json::Value, event: &serde_json::Value) -> Answer<serde_json::Value> {
         match self.levels.lock().unwrap().get(level).map(String::as_str) {
             Some("echo" | "echo again") => done(serde_json::json!({ "told": event })),
             Some(_) => fail("sandbox", "tell", format!("{level} cannot go on")),
             None => fail("sandbox", "tell", format!("nothing runs as {level}")),
         }
     }
-    fn stop(&self, level: &str) -> Answer<()> {
+    fn stop(&self, level: &str, _given: &serde_json::Value) -> Answer<()> {
         match self.levels.lock().unwrap().remove(level) {
             Some(_) => done(()),
             None => fail("sandbox", "stop", format!("nothing runs as {level}")),
         }
     }
-    fn running(&self, level: &str) -> Answer<Option<String>> {
+    fn running(&self, level: &str, _given: &serde_json::Value) -> Answer<Option<String>> {
         done(self.levels.lock().unwrap().get(level).cloned())
     }
 }
