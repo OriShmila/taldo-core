@@ -188,3 +188,28 @@ fn a_twin_folded_again_from_its_rows_is_the_same() {
     assert_eq!(a.nodes.keys().collect::<Vec<_>>(), b.nodes.keys().collect::<Vec<_>>());
     assert_eq!(signs(&a, "Dana"), signs(&b, "Dana"));
 }
+
+#[test]
+fn a_delete_waits_from_when_it_arrived_never_its_writers_clock() {
+    let keep = act(10, ORI, ORI, "be", json!({}), json!({ "keep_deleted": 1_000 }));
+    let mut d = act(11, ORI, ENGINE, "delete", json!({}), json!({}));
+    d["ts"] = json!(-5_000);
+    let d = signed(d);
+    let mut d = d;
+    d["arrived"] = json!(5_000);
+    let mut early = act(12, ORI, ENGINE, "purge", json!({ "re": 11 }), json!({ "sigs": [] }));
+    early["arrived"] = json!(5_500);
+    let t = with(&[keep, d, early]);
+    assert!(!taken(&t, 12), "a purge was taken by its delete's writer's time, before the delete's own wait from when it arrived");
+}
+
+#[test]
+fn whoever_joins_proves_the_key_they_name() {
+    let unsigned = json!({ "g": 11, "ts": 11, "arrived": 11, "by": "Dana", "at": "Dana", "is": "be", "refs": { "re": 10 }, "value": { "keys": [{ "key": public("Dana") }] } });
+    let t = with(&[invite(10, ORI), unsigned]);
+    assert!(!taken(&t, 11), "someone joined without proving any key");
+    let mut other = json!({ "g": 11, "ts": 11, "by": "Dana", "at": "Dana", "is": "be", "refs": { "re": 10 }, "value": { "keys": [{ "key": public("Dana") }] } });
+    other = signed_by("Mallory", other);
+    let t = with(&[invite(10, ORI), other]);
+    assert!(!taken(&t, 11), "someone joined signing with a key they do not name");
+}

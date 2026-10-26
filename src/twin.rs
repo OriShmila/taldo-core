@@ -124,8 +124,6 @@ pub struct Twin {
     pub(crate) present: OrdSet<i64>,
     /// the signatures of every act a purge erased, in their standard spelling: never taken again
     pub(crate) erased: OrdSet<String>,
-    /// when each take-over arrived: its key signs a day after
-    pub(crate) arrivals: OrdMap<i64, i64>,
 }
 
 impl Twin {
@@ -173,15 +171,6 @@ pub fn fold(entries: &[Value]) -> Twin {
     t
 }
 
-/// the entry numbers an entry points to
-pub fn numbers(e: &Value) -> Vec<i64> {
-    e["refs"]
-        .as_object()
-        .into_iter()
-        .flat_map(|o| o.values())
-        .filter_map(Value::as_i64)
-        .collect()
-}
 fn id_of(v: &Value) -> String {
     parse_id(v).unwrap_or_default()
 }
@@ -361,9 +350,12 @@ impl Twin {
     fn way_in(&self, e: &Value, arrived: i64) -> bool {
         let Some(g) = e["refs"]["re"].as_i64() else { return false };
         let Some(j) = self.entries.get(&g).filter(|j| j["is"] == "grant" && j["value"]["action"] == "join") else { return false };
-        let in_time = j["value"]["until"].as_i64().is_none_or(|u| arrived <= u);
         let used = self.answers.get(&g).into_iter().flatten().any(|x| self.is(*x) == "be");
-        in_time && !self.revoked(g) && !used
+        self.grant_in_force(g, &j, arrived) && !used
+    }
+    /// A GRANT IN FORCE when an act arrived: not revoked, and not run out (`until`, against when the act arrived) — the one test of it
+    fn grant_in_force(&self, g: i64, grant: &Value, arrived: i64) -> bool {
+        !self.revoked(g) && grant["value"]["until"].as_i64().is_none_or(|u| arrived < u)
     }
     /// SET FROM ABOVE: `by` is a node above `at` — or `at` itself when nothing is above it (a person says who they are)
     fn from_above(&self, at: &str, by: &str) -> bool {
@@ -384,7 +376,7 @@ impl Twin {
     /// above it — no one else's decline undoes it
     pub(crate) fn taken_over(&self, id: &str, arrived: i64) -> Vec<Value> {
         self.at_kind(id, "takeover")
-            .filter(|(g, _)| self.arrivals.get(g).is_some_and(|a| a + TAKEOVER_WAITS <= arrived))
+            .filter(|(_, e)| e["arrived"].as_i64().is_some_and(|a| a + TAKEOVER_WAITS <= arrived))
             .filter(|(g, _)| self.answers_from(*g, "decline", id).is_empty())
             .flat_map(|(_, e)| e["value"]["keys"].as_array().cloned().unwrap_or_default())
             .collect()
@@ -682,7 +674,8 @@ impl Twin {
                     return Err(json!({ "g": e["g"], "why": format!("{at} was deleted by {deleter}: only it, or a node above it, answers that delete") }));
                 }
                 if e["is"] == "purge" {
-                    let due = self.e(d)["ts"].as_i64().unwrap_or(0) + self.keep_for(&at).unwrap_or(i64::MAX - self.e(d)["ts"].as_i64().unwrap_or(0));
+                    let deleted_at = self.e(d)["arrived"].as_i64().expect("an entry taken carries when it arrived");
+                    let due = deleted_at.saturating_add(self.keep_for(&at).unwrap_or(i64::MAX));
                     if arrived < due {
                         return Err(json!({ "g": e["g"], "why": format!("the deletion of {at} waits until {due}") }));
                     }
@@ -800,7 +793,7 @@ impl Twin {
             .filter(|x| self.is(*x) == is)
             .map(|x| self.e(x))
             .filter(|x| self.within(&id_of(&x["by"]), to) && id_of(&x["refs"]["on"]) == on)
-            .filter(|x| from.map_or(true, |f| x["ts"].as_i64().is_some_and(|t| t >= f)))
+            .filter(|x| from.map_or(true, |f| x["arrived"].as_i64().is_some_and(|t| t >= f)))
             .filter_map(|x| x["value"][field].as_f64())
             .sum()
     }
@@ -826,7 +819,7 @@ impl Twin {
             if to.is_empty() || !self.within(by, &to) || v["action"] != is {
                 continue;
             }
-            if v["until"].as_i64().is_some_and(|u| arrived >= u) {
+            if !self.grant_in_force(g, &self.e(g), arrived) {
                 why = format!("the grant ({g}) that let {to} {is} {on} ran out");
                 continue;
             }
@@ -847,10 +840,11 @@ impl Twin {
     /// AN ENTRY ADMITTED LANDS, arrived at `arrived`: at its node, by its node, naming what it names — returns what it touched. Only
     /// after `admit` took it
     pub fn land(&mut self, e: &Value, present: bool, arrived: i64) -> BTreeSet<String> {
+        // WHEN IT ARRIVED, carried by the entry itself: the one time every rule reads — never its writer's
+        let mut kept = e.clone();
+        kept["arrived"] = json!(arrived);
+        let e = &kept;
         let mut touched = BTreeSet::new();
-        if e["is"] == "takeover" {
-            self.arrivals.insert(e["g"].as_i64().unwrap_or(0), arrived);
-        }
         if self.entries.source().is_none() || self.entries.is_overlay() {
             if let Some(s) = e["sig"]["sig"].as_str().and_then(crate::identity::canonical_sig) {
                 self.signatures.insert(s);

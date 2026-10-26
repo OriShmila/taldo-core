@@ -169,13 +169,14 @@ pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<bool, String> {
         Some(p) => return Err(format!("{p} is not a way back {by} granted")),
         None => keys_for(t, &by, arrived),
     };
-    // A PERSON'S FIRST KEY: nobody is above them and nothing knows them yet — whether they may come to be is the twin's (`admit`)
+    // A PERSON'S FIRST KEY: nobody is above them and nothing knows them yet — signed with a key it names (whether they may come to be
+    // is the twin's, `admit`); unsigned only at the record's very beginning, where nothing can be asked of it yet
     let first = !t.nodes.contains_key(&by)
         && parse_id(&e["at"]).as_deref() == Some(by.as_str())
         && e["is"] == "be"
         && e["value"]["keys"].is_array()
         && keys.is_empty();
-    if first && e["sig"].is_null() {
+    if first && e["sig"].is_null() && t.nodes.is_empty() {
         return Ok(false);
     }
     let seen = (
@@ -195,7 +196,7 @@ pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<bool, String> {
         .iter()
         .find(|(x, _)| *x == k)
         .cloned()
-        .or(first.then_some((k.clone(), false)))
+        .or((first && e["value"]["keys"].as_array().is_some_and(|ks| ks.iter().any(|x| x["key"] == k.as_str()))).then_some((k.clone(), false)))
     else {
         return Err(format!("that key does not sign for {by}"));
     };
