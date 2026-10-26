@@ -274,7 +274,7 @@ fn answering(is: &str, of: &str) -> Option<Whose> {
         ("restore", "delete") => Some(Whose::Writer),
         ("purge", "delete") => Some(Whose::Any),
         ("revoke", "grant") => Some(Whose::Writer),
-        ("decline", "ask") => Some(Whose::Holder),
+        ("decline" | "approve", "ask") => Some(Whose::Holder),
         ("decline", "takeover") => Some(Whose::Node),
         // a person come in by a way in: their first key, answering the join grant that named them
         ("be", "grant") => Some(Whose::As),
@@ -341,6 +341,10 @@ impl Twin {
     /// A NODE'S NAME: its detail `name` — never in its make, so erasing what it held leaves no name
     pub fn name(&self, id: &str) -> Option<String> {
         self.nodes.get(id)?.value.get("name")?.as_str().map(String::from)
+    }
+    /// EVERY ANSWER TO AN ENTRY, each one that counts — `answering` held it as it was taken: no reader says whose again
+    pub fn answers_to(&self, g: i64) -> Vec<i64> {
+        self.answers.get(&g).into_iter().flatten().copied().collect()
     }
     /// THE ANSWERS TO AN ENTRY FROM WHOEVER IT IS FOR: each entry answering `g` — of kind `is`, or of any kind when it is "" — written by
     /// `who` or a node above them. The one way to read an answer: every reader says whose answer counts, so none forgets to
