@@ -151,25 +151,28 @@ pub fn run(r: &dyn Run, ends: &dyn Fn(i32) -> Job, killed: &dyn Fn(i32) -> Job, 
 }
 
 /// SANDBOX: a level runs exactly the code it is given — `answers` a hash this environment has that answers what it is told, `other`
-/// another, `fails` one that cannot go on; replaced by another hash, the other runs; stopped, nothing runs and nothing is told; and a
-/// hash it does not have never runs
-pub fn sandbox(s: &dyn Sandbox, level: &str, answers: &str, other: &str, fails: &str) -> Result<(), String> {
+/// another, `fails` one that cannot go on, each run as `given` says (its seal); replaced by another hash, the other runs; stopped,
+/// nothing runs and nothing is told; and a hash it does not have never runs
+pub fn sandbox(s: &dyn Sandbox, level: &str, given: &serde_json::Value, answers: &str, other: &str, fails: &str) -> Result<(), String> {
     let changed = serde_json::json!({ "changed": {} });
-    refused(s.run(level, "a hash that was never sealed", &serde_json::json!({})), "running code it does not have")?;
+    refused(s.run(level, "a hash that was never sealed", given), "running code it does not have")?;
     if ok(s.running(level), "running before any")?.is_some() {
         return Err("a level ran before it was given code".into());
     }
-    ok(s.run(level, answers, &serde_json::json!({})), "run")?;
+    ok(s.run(level, answers, given), "run")?;
     if ok(s.running(level), "running")?.as_deref() != Some(answers) {
         return Err(format!("{level} does not read as running {answers}"));
     }
     ok(s.tell(level, &changed), "tell a running level")?;
-    ok(s.run(level, other, &serde_json::json!({})), "run another hash")?;
+    ok(s.run(level, other, given), "run another hash")?;
     if ok(s.running(level), "running after a replace")?.as_deref() != Some(other) {
         return Err(format!("{level} still runs what it ran before {other}"));
     }
-    ok(s.run(level, fails, &serde_json::json!({})), "run code that fails")?;
-    refused(s.tell(level, &changed), "telling code that cannot go on")?;
+    ok(s.run(level, fails, given), "run code that fails")?;
+    let failed = s.tell(level, &changed);
+    if failed.as_ref().is_ok_and(|d| d.value["answer"].is_null()) {
+        return Err("code that cannot go on was told, and said nothing of it".into());
+    }
     ok(s.stop(level), "stop")?;
     if ok(s.running(level), "running after stop")?.is_some() {
         return Err("a stopped level still runs".into());
