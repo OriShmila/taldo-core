@@ -138,6 +138,17 @@ impl Store for FakeStore {
         *self.state.lock().unwrap() = Some(state.to_vec());
         done(())
     }
+    fn erase(&self, holder: &str, erased: &[serde_json::Value]) -> Answer<()> {
+        self.holds(holder, "erase")?;
+        let mut rows = self.rows.lock().unwrap();
+        if let Some(e) = erased.iter().find(|e| e["g"].as_i64().is_none_or(|g| !rows.contains_key(&g))) {
+            return fail("store", "erase", format!("no row kept as {}", e["g"]));
+        }
+        for e in erased {
+            rows.insert(e["g"].as_i64().expect("checked"), e.clone());
+        }
+        done(())
+    }
 }
 
 // ─── Clock: simulated time ───
@@ -201,6 +212,9 @@ impl Sandbox for FakeSandbox {
     }
     fn running(&self, level: &str, _given: &serde_json::Value) -> Answer<Option<String>> {
         done(self.levels.lock().unwrap().get(level).cloned())
+    }
+    fn list(&self, _place: &serde_json::Value) -> Answer<Vec<serde_json::Value>> {
+        done(self.levels.lock().unwrap().iter().map(|(l, c)| serde_json::json!({ "level": l, "code": c })).collect())
     }
 }
 
@@ -439,7 +453,7 @@ impl Source for FakeSource<'_> {
         let words = input["words"].as_str().filter(|w| !w.trim().is_empty()).ok_or(Fail { seam: "source", call: "act", why: "nothing was asked".into(), retry: None })?;
         let record = self.record.ok_or(Fail { seam: "source", call: "act", why: "no record to ask".into(), retry: None })?;
         record.may(m).map_err(|why| Fail { seam: "source", call: "act", why, retry: None })?;
-        record.happened(m, &Cost::default()).map_err(|why| Fail { seam: "source", call: "act", why, retry: None })?;
+        record.happened(m, &Cost::default()).map_err(|u| Fail { seam: "source", call: "act", why: u.to_string(), retry: None })?;
         done(serde_json::json!({ "says": format!("{} / {words}", input["system"].as_str().unwrap_or("")) }))
     }
 }
@@ -457,8 +471,8 @@ impl Record for FakeRecord {
         }
         Ok(())
     }
-    fn happened(&self, m: &Move, cost: &Cost) -> Result<(), String> {
-        self.may(m)?;
+    fn happened(&self, m: &Move, cost: &Cost) -> Result<(), crate::seams::Unwritten> {
+        self.may(m).map_err(crate::seams::Unwritten::Refused)?;
         self.happened.lock().unwrap().push((m.clone(), cost.clone()));
         Ok(())
     }

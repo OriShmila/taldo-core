@@ -29,7 +29,7 @@ pub struct Move {
 /// refused it). The adapter obeys: it asks before, and hands what happened after; it decides nothing itself
 pub trait Record: Send + Sync {
     fn may(&self, m: &Move) -> Result<(), String>;
-    fn happened(&self, m: &Move, cost: &Cost) -> Result<(), String>;
+    fn happened(&self, m: &Move, cost: &Cost) -> Result<(), Unwritten>;
 }
 
 /// AN ENTRY NOT WRITTEN: the twin refused it — a door said no, with why — or it could not be kept (a fault, with why). Never told
@@ -135,6 +135,9 @@ pub trait Store: crate::rows::Source {
     /// the twin's state written last, whole
     fn state(&self) -> Answer<Option<Vec<u8>>>;
     fn put_state(&self, holder: &str, state: &[u8]) -> Answer<()>;
+    /// ROWS ERASED: each kept row numbered as one of `rows` replaced by it — what stays of an entry a purge erased (`twin::erased_row`),
+    /// found by its signature no more — as the lease's holder; refused for anyone else, and for a number never kept
+    fn erase(&self, holder: &str, rows: &[serde_json::Value]) -> Answer<()>;
 }
 
 // ─── CLOCK: time, and timers that outlive a restart ───
@@ -195,6 +198,9 @@ pub trait Sandbox {
     fn stop(&self, level: &str, given: &serde_json::Value) -> Answer<()>;
     /// the hash running as `level` now — none when nothing does
     fn running(&self, level: &str, given: &serde_json::Value) -> Answer<Option<String>>;
+    /// EVERYTHING THIS BOX RUNS at the place `place` names (for a box on a server: its host; in-process: anything) — each `{ level,
+    /// code, vm? }`: where it runs, as `run` was given it — so its parent sees what runs, never only what it remembers it started
+    fn list(&self, place: &serde_json::Value) -> Answer<Vec<serde_json::Value>>;
 }
 
 // ─── NET IN: being reached ───

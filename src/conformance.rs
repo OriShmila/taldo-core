@@ -88,6 +88,12 @@ pub fn store(s: &dyn Store) -> Result<(), String> {
     if s.signed(&standard) != Some(2) || s.signed(&crate::identity::canonical_sig(&sig(3)).expect("a signature")).is_some() {
         return Err("an entry was not found by its signature's standard spelling (identity::canonical_sig)".into());
     }
+    refused(s.erase("b", &[serde_json::json!({ "g": 2, "is": "erased" })]), "erasing without the lease")?;
+    refused(s.erase("a", &[serde_json::json!({ "g": 3, "is": "erased" })]), "erasing a row never kept")?;
+    ok(s.erase("a", &[serde_json::json!({ "g": 2, "is": "erased", "value": {} })]), "erase a row")?;
+    if s.entry(2) != Some(serde_json::json!({ "g": 2, "is": "erased", "value": {} })) || s.signed(&standard).is_some() {
+        return Err("an erased row still reads as it was, or is still found by its signature".into());
+    }
     refused(s.put_state("b", b"s"), "writing the state without the lease")?;
     ok(s.put_state("a", b"state 1"), "write the state")?;
     if ok(s.state(), "read the state")?.as_deref() != Some(&b"state 1"[..]) {
@@ -163,6 +169,9 @@ pub fn sandbox(s: &dyn Sandbox, level: &str, given: &serde_json::Value, answers:
     if ok(s.running(level, given), "running")?.as_deref() != Some(answers) {
         return Err(format!("{level} does not read as running {answers}"));
     }
+    if !ok(s.list(given), "list what runs")?.iter().any(|r| r["level"] == level && r["code"] == answers) {
+        return Err(format!("what the box runs does not list {level} running {answers}"));
+    }
     ok(s.tell(level, given, &changed), "tell a running level")?;
     ok(s.run(level, other, given), "run another hash")?;
     if ok(s.running(level, given), "running after a replace")?.as_deref() != Some(other) {
@@ -174,7 +183,7 @@ pub fn sandbox(s: &dyn Sandbox, level: &str, given: &serde_json::Value, answers:
         return Err("code that cannot go on was told, and said nothing of it".into());
     }
     ok(s.stop(level, given), "stop")?;
-    if ok(s.running(level, given), "running after stop")?.is_some() {
+    if ok(s.running(level, given), "running after stop")?.is_some() || ok(s.list(given), "list after stop")?.iter().any(|r| r["level"] == level) {
         return Err("a stopped level still runs".into());
     }
     refused(s.tell(level, given, &changed), "telling a stopped level")?;

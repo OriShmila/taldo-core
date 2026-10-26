@@ -278,3 +278,60 @@ fn a_grant_is_taken_only_whole() {
         assert!(!taken(&with(&[act(10, TALDO, ENGINE, "grant", json!({}), v.clone())]), 10), "a grant not whole was taken: {v}");
     }
 }
+
+// ─── THE SECOND REVIEW'S PROBES (26 Oct): who signed is recorded; a way back reaches only what it names; a no counts only from
+// whose it is ───
+
+#[test]
+fn a_way_back_reaches_only_the_node_it_names() {
+    let es = vec![
+        first_key(ORI),
+        act(1, ORI, ORI, "grant", json!({}), json!({ "action": "join", "as": "Bob" })),
+        signed(json!({ "g": 2, "ts": 2, "arrived": 2, "by": "Bob", "at": "Bob", "is": "be", "refs": { "re": 1 }, "value": { "keys": [{ "key": public("Bob") }] } })),
+        act(3, ORI, ORI, "grant", json!({}), json!({ "action": "take over", "to": "Bob" })),
+        make(4, "Bob", "Bob › agent", "Bob", "agent"),
+        signed_by("Bob › agent", json!({ "g": 5, "ts": 5, "by": ORI, "at": ORI, "is": "takeover", "refs": { "proof": "Bob › agent" }, "value": { "keys": [{ "key": public("thief") }] } })),
+        signed_by("Bob › agent", json!({ "g": 6, "ts": 6, "by": ORI, "at": ORI, "is": "takeover", "refs": { "proof": "Bob" }, "value": { "keys": [{ "key": public("thief") }] } })),
+    ];
+    let t = fold(&es);
+    assert!(!t.entries.contains_key(&5) && !t.entries.contains_key(&6), "a node under the way back took Ori over");
+}
+
+#[test]
+fn a_move_stays_made_when_its_signer_changes_keys() {
+    let mut es = vec![first_key(ORI), make(1, ORI, "T", ORI, "thing")];
+    es.push(act(2, "T", "T", "ask", json!({ "about": "T" }), json!({ "label": "go", "moves": [{ "says": "ok", "act": { "is": "approve" }, "to": { "x": 1 } }] })));
+    es.push(act(3, ORI, "T", "approve", json!({ "re": 2 }), json!({})));
+    assert!(fold(&es).moved(2).is_some());
+    es.push(act(4, ORI, ORI, "be", json!({}), json!({ "keys": [{ "key": public("Ori2") }] })));
+    let t = fold(&es);
+    assert!(t.moved(2).is_some() && !t.ask_open(2), "a move came undone when its signer's keys changed: {:?}", t.rejected);
+}
+
+#[test]
+fn a_no_is_taken_only_from_whose_it_is() {
+    let es = vec![
+        first_key(ORI),
+        make(1, ORI, "T", ORI, "thing"),
+        make(2, ORI, "C", ORI, "thing"),
+        act(3, "T", "T", "ask", json!({ "about": "T" }), json!({ "label": "go", "moves": [{ "says": "ok", "to": { "x": 1 } }] })),
+        act(4, "C", "C", "decline", json!({ "re": 3 }), json!({})),
+    ];
+    let t = fold(&es);
+    assert!(!t.entries.contains_key(&4) && t.ask_open(3), "a no from beside the holder was taken");
+}
+
+#[test]
+fn code_never_decides_by_signing_as_a_node_of_its_own() {
+    let h = "a".repeat(64);
+    let es = vec![
+        first_key(ORI),
+        make(1, ORI, "S", ORI, "level"),
+        act(2, ORI, "S", "seal", json!({}), json!({ "wasm": h, "cwasm": { "m": h }, "contract": "c", "reach": [] })),
+        act(3, "S", "S › c", "make", json!({ "in": "S" }), json!({ "kind": "x" })),
+        signed_by("S", json!({ "g": 4, "ts": 4, "by": "S › c", "at": "S › c › d", "is": "make", "refs": { "in": "S › c" }, "value": { "kind": "x", "keys": [{ "key": public("anyone") }] } })),
+    ];
+    let t = fold(&es);
+    assert!(!t.nodes.contains_key("S › c › d"), "code gave a node its keys by signing as its own child");
+    assert!(!fold(&[first_key(ORI), act(1, ORI, "K", "make", json!({ "in": ORI }), json!({}))]).nodes.contains_key("K"), "a make that says no kind was taken");
+}

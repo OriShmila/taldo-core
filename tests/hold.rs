@@ -62,7 +62,7 @@ fn entry(g: i64, by: &[String], at: &[String], is: &str, refs: Value, value: Val
 }
 /// a node made by the one above it, given its key
 fn made(g: i64, n: &[String]) -> Value {
-    entry(g, &n[..n.len() - 1], n, "make", json!({ "in": k(&n[..n.len() - 1]) }), json!({ "kind": "", "keys": [{ "key": common::public(&k(n)) }] }))
+    entry(g, &n[..n.len() - 1], n, "make", json!({ "in": k(&n[..n.len() - 1]) }), json!({ "kind": "thing", "keys": [{ "key": common::public(&k(n)) }] }))
 }
 /// the seeds drawn: 1..=40, or the range TALDO_SEEDS names ("1001..3000") — for a held-out run on seeds never looked at
 fn seeds() -> std::ops::RangeInclusive<u64> {

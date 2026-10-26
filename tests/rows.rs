@@ -58,7 +58,7 @@ fn take(t: &mut Twin, rows: &Rows, e: &Value, arrived: i64) {
     match t.admit(e, arrived) {
         Ok(present) => {
             rows.put(e);
-            t.land(e, present, arrived);
+            t.land(e, &present, arrived);
         }
         Err(why) => t.rejected.push_back(why),
     }

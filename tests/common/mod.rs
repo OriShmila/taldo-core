@@ -82,7 +82,7 @@ pub fn touched(mut e: Value) -> Value {
 /// readable ids; the graph never reads them
 pub fn under(g: i64, id: &str) -> Value {
     let (parent, _) = id.rsplit_once(" › ").expect("an id with a parent");
-    make(g, parent, id, parent, "")
+    make(g, parent, id, parent, "thing")
 }
 /// nodes made, each under the one its id names one step up, numbered from `g` — the places a test world acts at
 pub fn tree(g: i64, ids: &[&str]) -> Vec<Value> {

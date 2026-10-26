@@ -85,6 +85,22 @@ fn a_purge_erases_what_it_held_after_the_waiting_and_keeps_the_skeleton() {
     // after it, taken — and the record without what it erased folds to the skeleton
     let t = with(&[keep(19), delete(20, 20, "dana"), purge(21, 20 + KEEP)]);
     assert!(taken(&t, 21), "{}", why(&t, 21));
+    // ERASED, NOT HIDDEN: what it held says nothing any more — in the twin, and in the rows the keeper replaces (`erases`), which
+    // fold again as they are
+    for g in [6, 7] {
+        assert!(t.entries.get(&g).is_some_and(|e| e["is"] == "erased" && e["value"] == json!({}) && e["sig"].is_null()), "entry {g} still says what it said");
+    }
+    assert_eq!((t.name("dana"), t.nodes["form"].value.get("id")), (None, None), "what was erased is still read off its node");
+    let before = with(&[keep(19), delete(20, 20, "dana")]);
+    let stubs = before.erases(&purge(21, 20 + KEEP));
+    assert_eq!(stubs.iter().map(|r| r["g"].as_i64().unwrap()).collect::<Vec<_>>(), vec![6, 7]);
+    let mut rows: Vec<Value> = world().into_iter().chain([keep(19), delete(20, 20, "dana"), purge(21, 20 + KEEP)]).map(|mut e| { common::arrives(&mut e); e }).collect();
+    for r in &stubs {
+        let at = rows.iter().position(|e| e["g"] == r["g"]).unwrap();
+        rows[at] = r.clone();
+    }
+    let again = fold(&rows);
+    assert!(again.rejected.is_empty() && taken(&again, 21) && again.entries.get(&6).unwrap()["is"] == "erased", "erased rows did not fold again: {:?}", again.rejected);
     let mut after: Vec<Value> = world().into_iter().filter(|e| !erased.contains(&e["g"].as_i64().unwrap())).collect();
     after.extend([keep(19), delete(20, 20, "dana"), purge(21, 20 + KEEP)]);
     let t = fold(&after);

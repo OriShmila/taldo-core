@@ -141,9 +141,16 @@ fn signer(e: &Value) -> Result<(String, bool), String> {
 static VERIFIED: Mutex<Option<BTreeMap<(String, String), (String, bool)>>> = Mutex::new(None);
 const VERIFIED_AT_MOST: usize = 4_096;
 
-/// THE KEYS THAT SIGN FOR A NODE: its own and every node's above it, a take-over's that stands, and those of whoever carries any of them now — each with
-/// whether its giver marked it a presence key
-pub fn keys_for(t: &Twin, by: &str, arrived: i64) -> Vec<(String, bool)> {
+/// WHO SIGNED AN ENTRY, as admission found it: the node whose key signed (`signer`) — itself, a node above it, or one carrying it —
+/// and whether a person was there. Every rule of who acted reads this, never the `by` an entry says, nor the keys a node has today
+#[derive(Clone, Debug, PartialEq)]
+pub struct Signed {
+    pub signer: String,
+    pub present: bool,
+}
+/// THE NODES WHOSE KEYS SIGN FOR A NODE: itself and every node above it, and whoever carries any of them now, with every node above
+/// them — nearest first
+pub fn signing_nodes(t: &Twin, by: &str) -> Vec<String> {
     let mut nodes = t.chain(by);
     for x in nodes.clone() {
         for c in t.nodes.get(&x).and_then(|n| n.who.get("carried_by")).map(ids_of).unwrap_or_default() {
@@ -151,22 +158,30 @@ pub fn keys_for(t: &Twin, by: &str, arrived: i64) -> Vec<(String, bool)> {
         }
     }
     nodes
-        .iter()
-        .flat_map(|x| {
-            // WHO IT IS: its keys as decided from above, and a take-over's once it waited
-            t.nodes.get(x).and_then(|n| n.who.get("keys")).and_then(Value::as_array).cloned().unwrap_or_default().into_iter().chain(t.taken_over(x, arrived))
-        })
-        .filter_map(|k| Some((k["key"].as_str()?.to_string(), k["presence"] == true)))
+}
+/// A NODE'S OWN KEYS, when an act arrived: as decided from above, and a take-over's once it waited — each with its node, and whether
+/// its giver marked it a presence key
+fn own_keys(t: &Twin, x: &str, arrived: i64) -> Vec<(String, bool, String)> {
+    t.nodes.get(x).and_then(|n| n.who.get("keys")).and_then(Value::as_array).cloned().unwrap_or_default().into_iter().chain(t.taken_over(x, arrived))
+        .filter_map(|k| Some((k["key"].as_str()?.to_string(), k["presence"] == true, x.to_string())))
         .collect()
 }
+/// THE KEYS THAT SIGN FOR A NODE, each with whether its giver marked it a presence key: every signing node's own (`signing_nodes`)
+pub fn keys_for(t: &Twin, by: &str, arrived: i64) -> Vec<(String, bool)> {
+    signers(t, by, arrived).into_iter().map(|(k, p, _)| (k, p)).collect()
+}
+fn signers(t: &Twin, by: &str, arrived: i64) -> Vec<(String, bool, String)> {
+    signing_nodes(t, by).iter().flat_map(|x| own_keys(t, x, arrived)).collect()
+}
 /// IDENTITY: the entry is from its node — or why not; and whether a person was there when it was signed
-pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<bool, String> {
+pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<Signed, String> {
     let by = parse_id(&e["by"]).ok_or("by is not a node")?;
-    // A TAKE-OVER is signed by the way back it names, when its person granted that way
+    // A TAKE-OVER is signed by the way back it names — with that way's own key only, never a node above it or carrying it — when its
+    // person granted that very way
     let keys = match parse_id(&e["refs"]["proof"]).filter(|_| e["is"] == "takeover") {
-        Some(p) if t.takeover_granted(&by, &p, arrived) => keys_for(t, &p, arrived),
+        Some(p) if t.takeover_granted(&by, &p, arrived) => own_keys(t, &p, arrived),
         Some(p) => return Err(format!("{p} is not a way back {by} granted")),
-        None => keys_for(t, &by, arrived),
+        None => signers(t, &by, arrived),
     };
     // A PERSON'S FIRST KEY: nobody is above them and nothing knows them yet — signed with a key it names (whether they may come to be
     // is the twin's, `admit`); unsigned only at the record's very beginning, where nothing can be asked of it yet
@@ -176,7 +191,7 @@ pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<bool, String> {
         && e["value"]["keys"].is_array()
         && keys.is_empty();
     if first && e["sig"].is_null() && t.nodes.is_empty() {
-        return Ok(false);
+        return Ok(Signed { signer: by, present: false });
     }
     let seen = (
         e["sig"]["sig"].as_str().unwrap_or("").to_string(),
@@ -191,11 +206,11 @@ pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<bool, String> {
         Some(x) => x,
         None => signer(e)?,
     };
-    let Some((_, marked)) = keys
+    let Some((_, marked, signer)) = keys
         .iter()
-        .find(|(x, _)| *x == k)
+        .find(|(x, _, _)| *x == k)
         .cloned()
-        .or((first && e["value"]["keys"].as_array().is_some_and(|ks| ks.iter().any(|x| x["key"] == k.as_str()))).then_some((k.clone(), false)))
+        .or((first && e["value"]["keys"].as_array().is_some_and(|ks| ks.iter().any(|x| x["key"] == k.as_str()))).then(|| (k.clone(), false, by.clone())))
     else {
         return Err(format!("that key does not sign for {by}"));
     };
@@ -207,7 +222,7 @@ pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<bool, String> {
         v.clear();
     }
     v.insert(seen, (k, present));
-    Ok(present || marked)
+    Ok(Signed { signer, present: present || marked })
 }
 
 /// A REQUEST SIGNED AS AN ACT: a screen or an agent proves who makes a request the way every entry proves who wrote it — the act

@@ -124,6 +124,8 @@ pub struct Twin {
     pub(crate) present: OrdSet<i64>,
     /// the signatures of every act a purge erased, in their standard spelling: never taken again
     pub(crate) erased: OrdSet<String>,
+    /// WHO SIGNED EACH ENTRY, as admission found it (`identity::Signed`): the node whose key it was
+    pub(crate) signers: OrdMap<i64, String>,
 }
 
 impl Twin {
@@ -257,7 +259,12 @@ enum Whose {
     Writer,
     Node,
     As,
+    Holder,
     Any,
+}
+/// WHAT STAYS OF AN ENTRY A PURGE ERASED: its number, where it was and by whom, when it arrived — nothing it said, nor its signature
+pub fn erased_row(e: &Value) -> Value {
+    json!({ "g": e["g"], "by": e["by"], "at": e["at"], "is": "erased", "refs": {}, "value": {}, "arrived": e["arrived"] })
 }
 /// WHAT EACH KIND ANSWERS, AND WHOSE ANSWER COUNTS — the one table of it, held at admission, so every answer in the twin is one that
 /// counts: an undo, a carrying out, a taking back and a no answer only what they name; a delete, a grant and a take-over are answered
@@ -267,7 +274,7 @@ fn answering(is: &str, of: &str) -> Option<Whose> {
         ("restore", "delete") => Some(Whose::Writer),
         ("purge", "delete") => Some(Whose::Any),
         ("revoke", "grant") => Some(Whose::Writer),
-        ("decline", "ask") => Some(Whose::Any),
+        ("decline", "ask") => Some(Whose::Holder),
         ("decline", "takeover") => Some(Whose::Node),
         // a person come in by a way in: their first key, answering the join grant that named them
         ("be", "grant") => Some(Whose::As),
@@ -343,7 +350,7 @@ impl Twin {
     }
     /// a delete brought back: a `restore` answering it, by whoever deleted or a node above them
     fn restored(&self, d: i64) -> bool {
-        !self.answers_from(d, "restore", &id_of(&self.e(d)["by"])).is_empty()
+        self.answers.get(&d).is_some_and(|a| a.iter().any(|x| self.is(*x) == "restore"))
     }
     /// a delete carried out: a `purge` answering it — any taken, since one is taken only once the waiting is over and naming what it
     /// erases; it undoes nothing
@@ -379,10 +386,14 @@ impl Twin {
             .iter()
             .filter_map(|x| self.nodes.get(x))
             .flat_map(|n| n.at.iter().copied())
-            .filter(|g| !matches!(self.is(*g), "make" | "delete" | "restore" | "purge"))
+            .filter(|g| !matches!(self.is(*g), "make" | "delete" | "restore" | "purge" | "erased"))
             .collect();
         out.sort();
         out
+    }
+    /// WHAT A PURGE ERASES, as the rows that stay of it (`erased_row`) — what the keeper replaces its rows with
+    pub fn erases(&self, purge: &Value) -> Vec<Value> {
+        purge["refs"]["re"].as_i64().map(|d| self.erasing(d)).unwrap_or_default().into_iter().map(|g| erased_row(&self.e(g))).collect()
     }
     /// THE CODE A NODE RUNS: its newest seal — said by a level above it — or none; nothing runs at a node deleted or blocked
     pub fn sealed(&self, node: &str) -> Option<i64> {
@@ -407,9 +418,11 @@ impl Twin {
     /// a node being made, at or above where it is made — and never by a node that runs code: code is what runs, never who decides.
     /// Each kind may only narrow it: a take-over brings only keys, by a person for themselves; a way back is a person's, to a person,
     /// a device, a recovery code or a proof of theirs
-    fn may_decide(&self, e: &Value, what: &str, by: &str, at: &str, root: bool) -> Result<(), String> {
-        if self.sealed(by).is_some() {
-            return Err(format!("{by} runs code: it never decides {what}"));
+    fn may_decide(&self, e: &Value, what: &str, by: &str, at: &str, root: bool, signer: &str) -> Result<(), String> {
+        // NEVER BY CODE: neither the node it is written as, nor the node whose key signed it — code signing as a node of its own
+        // decides no more than code itself
+        if let Some(x) = [by, signer].into_iter().find(|x| self.sealed(x).is_some()) {
+            return Err(format!("{x} runs code: it never decides {what}"));
         }
         let above = match e["is"].as_str().unwrap_or("") {
             "make" => self.within(&id_of(&e["refs"]["in"]), by),
@@ -657,6 +670,18 @@ impl Twin {
     /// ONE ENTRY LANDS, as its row was kept: at its node, by its node, naming what it names, arrived when its row says (`arrived`) —
     /// returns what it touched
     pub fn apply(&mut self, e: &Value) -> BTreeSet<String> {
+        // A ROW A PURGE ERASED (`erased_row`): only where it was, at a node that is — its purge, later in the rows, is taken as ever
+        if e["is"] == "erased" {
+            let (by, at, g) = (id_of(&e["by"]), id_of(&e["at"]), e["g"].as_i64());
+            let Some(g) = g.filter(|_| self.nodes.contains_key(&by) && self.nodes.contains_key(&at)) else {
+                self.rejected.push_back(json!({ "g": e["g"], "why": "an erased row of no node that is" }));
+                return BTreeSet::new();
+            };
+            self.entries.insert(g, e);
+            self.nodes.get_mut(&by).expect("checked").by.push_back(g);
+            self.nodes.get_mut(&at).expect("checked").at.push_back(g);
+            return BTreeSet::from([at]);
+        }
         // WHEN IT ARRIVED is the receiver's, kept with its row (`arrived`) — never the time its writer wrote in it
         match e["arrived"].as_i64() {
             Some(arrived) => self.apply_arrived(e, arrived),
@@ -669,7 +694,7 @@ impl Twin {
     /// ONE ENTRY LANDS, arrived at `arrived` (ms, the receiver's clock): taken, or kept among the rejected with why
     pub fn apply_arrived(&mut self, e: &Value, arrived: i64) -> BTreeSet<String> {
         match self.admit(e, arrived) {
-            Ok(present) => self.land(e, present, arrived),
+            Ok(signed) => self.land(e, &signed, arrived),
             Err(why) => {
                 self.rejected.push_back(why);
                 BTreeSet::new()
@@ -679,12 +704,13 @@ impl Twin {
     /// WHETHER AN ENTRY WOULD BE TAKEN, arrived at `arrived` — every check made before anything changes: taken, with whether a person
     /// was there, or refused with why (`{ g, why, … }`). The twin is untouched either way: an entry refused leaves no trace, its
     /// signature included
-    pub fn admit(&self, e: &Value, arrived: i64) -> Result<bool, Value> {
+    pub fn admit(&self, e: &Value, arrived: i64) -> Result<crate::identity::Signed, Value> {
         // the entry is well formed, at its writer or below (`check`), and from its writer (`identity`) — and taken once
-        let present = match check(e).and_then(|_| crate::identity::verify(self, e, arrived)) {
-            Ok(p) => p,
+        let signed = match check(e).and_then(|_| crate::identity::verify(self, e, arrived)) {
+            Ok(s) => s,
             Err(why) => return Err(json!({ "g": e["g"], "why": why })),
         };
+        let present = signed.present;
         // AN OVERLAY OF ROWS takes only new acts: numbered above every row it was made on
         if let Some(to) = self.entries.overlay_of_rows() {
             if e["g"].as_i64().is_none_or(|g| g <= to) {
@@ -800,7 +826,7 @@ impl Twin {
         }
         // WHO A NODE IS AND WHAT IT RUNS: every door to them (`decides`) through the one test (`may_decide`)
         if let Some(what) = self.decides(e) {
-            if let Err(why) = self.may_decide(e, what, &by, &at, root) {
+            if let Err(why) = self.may_decide(e, what, &by, &at, root, &signed.signer) {
                 return Err(json!({ "g": e["g"], "why": why }));
             }
         }
@@ -820,6 +846,11 @@ impl Twin {
                 Some(Whose::Writer) => (!self.within(&id_of(&x["by"]), &by)).then(|| format!("#{re} was written by {}: only it, or a node above it, answers it with a {is}", id_of(&x["by"]))),
                 Some(Whose::Node) => (!self.within(&id_of(&x["at"]), &by)).then(|| format!("#{re} is at {}: only it, or a node above it, answers it with a {is}", id_of(&x["at"]))),
                 Some(Whose::As) => (x["value"]["action"] != "join" || x["value"]["as"] != json!(by)).then(|| format!("#{re} is no way in for {by}")),
+                Some(Whose::Holder) => match self.holder_of(re) {
+                    Some(h) if self.within(&h, &by) => None,
+                    Some(h) => Some(format!("#{re} is held by {h}: only it, or a node above it, answers it with a {is}")),
+                    None => Some(format!("#{re} is held by no one")),
+                },
                 Some(Whose::Any) => None,
             };
             if let Some(why) = not {
@@ -836,7 +867,13 @@ impl Twin {
                 return Err(json!({ "g": e["g"], "why": why }));
             }
         }
+        if e["is"] == "purge" && self.entries.is_overlay() {
+            return Err(json!({ "g": e["g"], "why": "an overlay shows what acts would do: it erases nothing" }));
+        }
         if e["is"] == "make" {
+            if e["value"]["kind"].as_str().is_none_or(str::is_empty) {
+                return Err(json!({ "g": e["g"], "why": "a make says what it makes (kind)" }));
+            }
             if let Some(k) = e["value"].as_object().into_iter().flatten().map(|(k, _)| k).find(|k| *k != "kind" && *k != "keys") {
                 return Err(json!({ "g": e["g"], "why": format!("a make says only its kind (and keys) — its {k} is a detail after it") }));
             }
@@ -852,27 +889,34 @@ impl Twin {
                 return Err(json!({ "g": e["g"], "why": why }));
             }
         }
-        Ok(present)
+        Ok(signed)
     }
     /// THE GRANTS IN FORCE ON A NODE when `arrived`: each `grant` at it, and each at a node above it that reaches below (`below`) — in
     /// force (`grant_in_force`: not revoked, not run out). The one way any grant is read: no reader tests a grant again
     pub fn grants_on(&self, on: &str, arrived: i64) -> Vec<i64> {
-        self.chain(on)
-            .iter()
-            .enumerate()
-            .flat_map(|(i, x)| self.at_kind(x, "grant").filter(move |(_, e)| i == 0 || e["value"]["below"] == true).map(|(g, e)| (g, e)).collect::<Vec<_>>())
-            .filter(|(g, e)| self.grant_in_force(*g, e, arrived))
-            .map(|(g, _)| g)
-            .collect()
+        self.grants_reaching(on).into_iter().filter(|(g, e)| self.grant_in_force(*g, e, arrived)).map(|(g, _)| g).collect()
     }
-    /// THE GRANTS IN FORCE LETTING `by` DO `action` ON `on`, as of `arrived`: at `on` or reaching below to it, to `by` or a node
-    /// above it — the one query of who a grant lets do what
+    /// EVERY GRANT REACHING A NODE, in force or not: at it, or at a node above it reaching below (`below`)
+    fn grants_reaching(&self, on: &str) -> Vec<(i64, Arc<Value>)> {
+        self.chain(on).iter().enumerate().flat_map(|(i, x)| self.at_kind(x, "grant").filter(move |(_, e)| i == 0 || e["value"]["below"] == true).collect::<Vec<_>>()).collect()
+    }
+    /// WHOM A GRANT LETS, by what it lets — the one table of it: a way in only the one it names (`as`); a way back only the very node
+    /// it names (`to`) — never a node under it; anything else the node it names and every node under it
+    fn lets(&self, grant: &Value, by: &str) -> bool {
+        let v = &grant["value"];
+        match v["action"].as_str() {
+            Some("join") => v["as"] == json!(by),
+            Some("take over") => parse_id(&v["to"]).as_deref() == Some(by),
+            _ => parse_id(&v["to"]).is_some_and(|to| self.within(by, &to)),
+        }
+    }
+    /// THE GRANTS IN FORCE LETTING `by` DO `action` ON `on`, as of `arrived` (`lets`) — the one query of who a grant lets do what
     pub fn grants_for(&self, on: &str, action: &str, by: &str, arrived: i64) -> Vec<i64> {
-        self.grants_on(on, arrived).into_iter().filter(|g| { let v = &self.e(*g)["value"]; v["action"] == action && parse_id(&v["to"]).is_some_and(|to| self.within(by, &to)) }).collect()
+        self.grants_on(on, arrived).into_iter().filter(|g| { let e = self.e(*g); e["value"]["action"] == action && self.lets(&e, by) }).collect()
     }
     /// a grant revoked: a `revoke` answering it, by its writer or a node above them
     fn revoked(&self, g: i64) -> bool {
-        !self.answers_from(g, "revoke", &id_of(&self.e(g)["by"])).is_empty()
+        self.answers.get(&g).is_some_and(|a| a.iter().any(|x| self.is(*x) == "revoke"))
     }
     /// HOW MUCH OF A BUDGET IS SPENT: `field` added over every act of kind `is` by `to` or under it on `on`, since `from` (by the acts'
     /// own time) — what a grant's budget is held against, and what a screen says of it
@@ -905,7 +949,7 @@ impl Twin {
     fn granted(&self, e: &Value, by: &str, on: &str, arrived: i64) -> Result<(), String> {
         let is = e["is"].as_str().unwrap_or("");
         // WHY NOT, said as it is: a grant that named this once and is no longer in force, or none ever
-        let once = self.chain(on).iter().flat_map(|x| self.at_kind(x, "grant").map(|(g, _)| g).collect::<Vec<_>>()).any(|g| { let v = &self.e(g)["value"]; v["action"] == is && self.within(by, &id_of(&v["to"])) });
+        let once = self.grants_reaching(on).into_iter().any(|(_, e)| e["value"]["action"] == is && self.lets(&e, by));
         let mut why = if once { format!("the grant that let {by} {is} {on} ran out, or was taken back") } else { format!("no grant lets {by} {is} {on}") };
         for g in self.grants_for(on, is, by, arrived) {
             let v = self.e(g)["value"].clone();
@@ -927,7 +971,10 @@ impl Twin {
     }
     /// AN ENTRY ADMITTED LANDS, arrived at `arrived`: at its node, by its node, naming what it names — returns what it touched. Only
     /// after `admit` took it
-    pub fn land(&mut self, e: &Value, present: bool, arrived: i64) -> BTreeSet<String> {
+    pub fn land(&mut self, e: &Value, signed: &crate::identity::Signed, arrived: i64) -> BTreeSet<String> {
+        let present = signed.present;
+        // WHAT A NEW PURGE ERASES — none for one whose rows were erased already (a record folded again)
+        let erasing = if e["is"] == "purge" { self.erases(e) } else { vec![] };
         let e = &kept(e, arrived);
         let mut touched = BTreeSet::new();
         if self.entries.source().is_none() || self.entries.is_overlay() {
@@ -940,6 +987,7 @@ impl Twin {
         if present {
             self.present.insert(g);
         }
+        self.signers.insert(g, signed.signer.clone());
         // A NODE COMES TO BE: a person by its first key, anything else by its make, under its parent
         if !self.nodes.contains_key(&at) {
             let parent = (e["is"] == "make").then(|| id_of(&e["refs"]["in"]));
@@ -1001,6 +1049,26 @@ impl Twin {
             _ => {}
         }
         self.settle(&mut touched);
+        // A PURGE ERASES, NOT HIDES: the twin is made again from what stays — every detail, hold and answer an erased entry gave goes
+        // with it. Kept as rows, the keeper erased them before this lands (`erases`, `Store::erase`); in memory, they are erased here
+        if !erasing.is_empty() {
+            let again = match self.entries.source().cloned() {
+                Some(src) => {
+                    if let Some(r) = erasing.iter().find(|r| src.entry(r["g"].as_i64().expect("an entry's number")).is_none_or(|x| x["is"] != "erased")) {
+                        panic!("a purge landed before its rows were erased: #{} — the keeper erases them first", r["g"]);
+                    }
+                    Twin::refold(src)
+                }
+                None => {
+                    for row in &erasing {
+                        self.entries.insert(row["g"].as_i64().expect("an entry's number"), row);
+                    }
+                    fold(&self.entries.values().map(|x| (*x).clone()).collect::<Vec<_>>())
+                }
+            };
+            touched.extend(again.subtree(&at));
+            *self = again;
+        }
         touched
     }
 
@@ -1202,12 +1270,11 @@ impl Twin {
             .copied()
             .filter(|w| *w > g && !self.out.contains_key(w))
             .find(|w| {
-                let by = id_of(&self.e(*w)["by"]);
                 let v = self.e(*w)["value"]
                     .as_object()
                     .cloned()
                     .unwrap_or_default();
-                self.within(holder, &by)
+                self.moved_as(*w, holder)
                     && moves
                         .iter()
                         .any(|m| m.iter().all(|(k, x)| v.get(k) == Some(x)))
@@ -1240,10 +1307,6 @@ impl Twin {
         if acts.is_empty() {
             return None;
         }
-        let theirs: BTreeSet<String> = crate::identity::keys_for(self, holder, i64::MAX)
-            .into_iter()
-            .map(|k| k.0)
-            .collect();
         self.answers
             .get(&g)
             .into_iter()
@@ -1252,7 +1315,7 @@ impl Twin {
             .filter(|w| *w > g && self.accepted(*w))
             .find(|w| {
                 let e = self.e(*w);
-                e["sig"]["key"].as_str().is_some_and(|k| theirs.contains(k))
+                self.moved_as(*w, holder)
                     && acts.iter().any(|a| {
                         a["is"] == e["is"]
                             && (a["value"].is_null() || a["value"] == e["value"])
@@ -1260,10 +1323,15 @@ impl Twin {
                     })
             })
     }
+    /// WHETHER ENTRY `w` IS A MOVE OF `holder`'S: signed by a node that signs for them (the holder, a level above, or one carrying
+    /// them), as admission recorded it — never the keys anyone has today
+    fn moved_as(&self, w: i64, holder: &str) -> bool {
+        self.signers.get(&w).is_some_and(|s| crate::identity::signing_nodes(self, holder).contains(s))
+    }
     /// declined by whoever holds it
-    fn declined_by(&self, g: i64, h: &str) -> bool {
-        // by its holder, or a level above it — you are above every hand
-        !self.answers_from(g, "decline", h).is_empty()
+    fn declined(&self, g: i64) -> bool {
+        // by its holder, or a level above it — you are above every hand: the only no an ask takes (`answering`)
+        self.answers.get(&g).is_some_and(|a| a.iter().any(|x| self.is(*x) == "decline"))
     }
     /// AN ASK IS OPEN until its thing moved or its holder declined it — and an ask that is evidence on another is never open itself
     pub fn ask_open(&self, g: i64) -> bool {
@@ -1309,7 +1377,7 @@ impl Twin {
     fn read_row(&self, about: &str, label: &str, x: i64, before: &[Row], tried: &BTreeSet<String>) -> Row {
         let holder = self.holder_with(about, label, x, tried);
         let moved = self.moved_by(x, &holder);
-        let declined = self.declined_by(x, &holder);
+        let declined = self.declined(x);
         let lands = self.lands(x);
         // THE ASK IT IS EVIDENCE ON: an earlier one like it, landing alike, itself no evidence, open when this one was raised
         let joins = before
