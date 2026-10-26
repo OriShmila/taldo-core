@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 use imbl::{OrdMap, Vector};
 use std::sync::Arc;
 
-const MAGIC: &[u8] = b"taldo twin state 12\n";
+const MAGIC: &[u8] = b"taldo twin state 13\n";
 
 struct W(Vec<u8>);
 impl W {
