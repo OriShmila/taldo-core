@@ -136,6 +136,21 @@ impl Twin {
             ..Default::default()
         }
     }
+    /// A TWIN FOLDED AGAIN FROM ITS ROWS, oldest first, each as it arrived — when no state of this twin's own is kept (none yet, or
+    /// one an older twin wrote, `snapshot::current`)
+    pub fn refold(source: Arc<dyn Source>) -> Twin {
+        let mut t = Twin::stored(source.clone());
+        let mut from = 0;
+        loop {
+            let page = source.page(from, i64::MAX, false, 1024);
+            let Some(last) = page.last().map(|(g, _)| *g) else { break };
+            for (_, e) in page {
+                t.apply(&e);
+            }
+            from = last + 1;
+        }
+        t
+    }
 }
 
 impl Twin {

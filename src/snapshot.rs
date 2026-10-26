@@ -195,6 +195,10 @@ impl Twin {
         w.0
     }
 
+    /// WHETHER A STATE IS THIS TWIN'S OWN: written by a twin of this shape — one an older twin wrote is folded again from the rows
+    pub fn current(state: &[u8]) -> bool {
+        state.starts_with(MAGIC)
+    }
     /// A TWIN AGAIN FROM ITS STATE (`snapshot`), its entries read from `source` — or why the state cannot be read
     pub fn restore(state: &[u8], source: Arc<dyn Source>) -> Result<Twin, String> {
         if !state.starts_with(MAGIC) {

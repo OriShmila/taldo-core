@@ -173,3 +173,18 @@ fn a_record_folds_by_when_each_row_arrived() {
     on_time["arrived"] = json!(900);
     assert!(taken(&with(&[grant, on_time]), 11), "a row that arrived in time was refused by its writer's time");
 }
+
+#[test]
+fn a_twin_folded_again_from_its_rows_is_the_same() {
+    use taldo_core::seams::Store;
+    let log: Vec<Value> = world().into_iter().chain([invite(10, ORI), joins(11, "Dana", 10)]).collect();
+    let store = std::sync::Arc::new(taldo_core::fakes::FakeStore::default());
+    store.lease("t").unwrap();
+    for e in &log {
+        store.append("t", std::slice::from_ref(e)).unwrap();
+    }
+    let (a, b) = (fold(&log), Twin::refold(store));
+    assert!(b.rejected.is_empty(), "{:?}", b.rejected);
+    assert_eq!(a.nodes.keys().collect::<Vec<_>>(), b.nodes.keys().collect::<Vec<_>>());
+    assert_eq!(signs(&a, "Dana"), signs(&b, "Dana"));
+}
