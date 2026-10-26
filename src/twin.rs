@@ -653,6 +653,16 @@ impl Twin {
                 }
             }
         }
+        // CODE NEVER GOVERNS: a node with code sealed at it never changes what governs a node — not even its own, so no outside key ever
+        // signs as it — and never makes who is who (a person, a device, a recovery code): people and the levels above them do
+        if self.sealed(&by).is_some() {
+            if let Some(k) = (e["is"] == "be").then(|| GOVERNING.iter().find(|k| e["value"].get(**k).is_some())).flatten() {
+                return Err(json!({ "g": e["g"], "why": format!("{by} runs sealed code: it never sets the {k} of {at}") }));
+            }
+            if e["is"] == "make" && e["value"]["kind"].as_str().is_some_and(|k| matches!(k, "person" | "device" | "recovery code")) {
+                return Err(json!({ "g": e["g"], "why": format!("{by} runs sealed code: it never makes a {}", e["value"]["kind"]) }));
+            }
+        }
         // AN ACT AT, OR ON, WHAT IS NOT YOURS (beside you, above you, another owner's): taken only under a grant in force on that node
         // that names this act and its writer, not run out, within its budget — or refused, with why
         let mut not_own: Vec<String> = parse_id(&e["refs"]["on"]).into_iter().collect();

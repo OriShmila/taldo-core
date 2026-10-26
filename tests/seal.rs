@@ -110,3 +110,22 @@ fn nothing_runs_at_a_node_deleted_or_blocked() {
     assert!(t.entries.contains_key(&12), "{:?}", t.rejected);
     assert_eq!(t.sealed(ENGINE), None, "blocked");
 }
+
+// CODE NEVER GOVERNS: the node a seal runs never changes what governs a node — its own keys, who carries it, what stays when it is
+// deleted, there or below — and never makes a person, a device or a recovery code; its plain details it writes as ever
+#[test]
+fn sealed_code_never_governs() {
+    let sealed = seal(10, "Ori › Taldo", whole('a'));
+    let t = with(&[sealed.clone(), act(11, ENGINE, ENGINE, "be", json!({}), json!({ "says": "ready" }))]);
+    assert!(t.entries.contains_key(&11), "its own plain detail was refused: {}", why(&t, 11));
+    for (g, at, k) in [(12, ENGINE, "keys"), (13, "Ori › Taldo › engine › part", "keys"), (14, ENGINE, "carried_by"), (15, ENGINE, "keep_deleted")] {
+        let t = with(&[sealed.clone(), act(g, ENGINE, at, "be", json!({}), json!({ k: [] }))]);
+        assert!(!t.entries.contains_key(&g), "sealed code set the {k} of {at}");
+        assert!(why(&t, g).contains("runs sealed code"), "{}", why(&t, g));
+    }
+    let t = with(&[sealed.clone(), act(16, ENGINE, "Ori › Taldo › engine › someone", "make", json!({ "in": ENGINE }), json!({ "kind": "person" }))]);
+    assert!(!t.entries.contains_key(&16) && why(&t, 16).contains("never makes"), "sealed code made a person");
+    // before it was sealed, the same node set its own keys as any node does
+    let t = with(&[act(12, ENGINE, ENGINE, "be", json!({}), json!({ "keys": [] }))]);
+    assert!(t.entries.contains_key(&12), "{}", why(&t, 12));
+}
