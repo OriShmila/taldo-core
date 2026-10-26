@@ -264,12 +264,12 @@ enum Whose {
     Holder,
     Any,
 }
-/// WHAT STAYS OF AN ENTRY A PURGE ERASED: its number, where it was and by whom, when it arrived, and who it said a node is — nothing
-/// else it said, nor its signature
-pub fn erased_row(e: &Value) -> Value {
+/// WHAT STAYS OF AN ENTRY A PURGE ERASED: its number, where it was and by whom, when it arrived, who it said a node is, and the purge
+/// that erased it (`purged_by`: every copy kept elsewhere — a backup — is replaced after it) — nothing else it said, nor its signature
+pub fn erased_row(e: &Value, purge: &Value) -> Value {
     // WHO A NODE IS stays (its keys, who carries it, how long its deletions wait): acts elsewhere were signed by it
     let who: Map<String, Value> = e["value"].as_object().into_iter().flatten().filter(|(k, _)| GOVERNING.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
-    json!({ "g": e["g"], "by": e["by"], "at": e["at"], "is": "erased", "refs": {}, "value": who, "arrived": e["arrived"] })
+    json!({ "g": e["g"], "by": e["by"], "at": e["at"], "is": "erased", "refs": {}, "value": who, "arrived": e["arrived"], "purged_by": purge["g"] })
 }
 /// WHAT EACH KIND ANSWERS, AND WHOSE ANSWER COUNTS — the one table of it, held at admission, so every answer in the twin is one that
 /// counts: an undo, a carrying out, a taking back and a no answer only what they name; a delete, a grant and a take-over are answered
@@ -439,7 +439,7 @@ impl Twin {
     }
     /// WHAT A PURGE ERASES, as the rows that stay of it (`erased_row`) — what the keeper replaces its rows with
     pub fn erases(&self, purge: &Value) -> Vec<Value> {
-        purge["refs"]["re"].as_i64().map(|d| self.erasing(d)).unwrap_or_default().into_iter().map(|g| erased_row(&self.e(g))).collect()
+        purge["refs"]["re"].as_i64().map(|d| self.erasing(d)).unwrap_or_default().into_iter().map(|g| erased_row(&self.e(g), purge)).collect()
     }
     /// THE CODE A NODE RUNS: its newest seal — said by a level above it — or none; nothing runs at a node deleted or blocked
     pub fn sealed(&self, node: &str) -> Option<i64> {
