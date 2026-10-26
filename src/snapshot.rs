@@ -301,6 +301,7 @@ impl Twin {
             }
             from = last + 1;
         }
+        t.read_from_rows();
         if t.rejected.len() > refused {
             return Err(format!("rows kept after the state are refused: {:?}", t.rejected.iter().skip(refused).take(5).collect::<Vec<_>>()));
         }

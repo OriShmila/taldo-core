@@ -148,15 +148,17 @@ pub struct Signed {
     pub signer: String,
     pub present: bool,
 }
-/// THE NODES WHOSE KEYS SIGN FOR A NODE: itself and every node above it, and whoever carries any of them now, with every node above
-/// them — nearest first
-pub fn signing_nodes(t: &Twin, by: &str) -> Vec<String> {
+/// THE NODES WHOSE KEYS SIGN FOR A NODE — the one answer to it, for entries and requests alike: itself and every node above it, and
+/// whoever carries any of them now, with every node above them — nearest first; never one blocked, nor one deleted (but, for the undo
+/// or carrying out of a delete, `undo`, a deleted one: whoever deleted itself answers its own delete)
+pub fn signing_nodes(t: &Twin, by: &str, undo: bool) -> Vec<String> {
     let mut nodes = t.chain(by);
     for x in nodes.clone() {
         for c in t.nodes.get(&x).and_then(|n| n.who.get("carried_by")).map(ids_of).unwrap_or_default() {
             nodes.extend(t.chain(&c).into_iter().filter(|y| !nodes.contains(y)).collect::<Vec<_>>());
         }
     }
+    nodes.retain(|x| !t.blocked(x) && (undo || !t.deleted(x)));
     nodes
 }
 /// A NODE'S OWN KEYS, when an act arrived: as decided from above, and a take-over's once it waited — each with its node, and whether
@@ -168,10 +170,10 @@ fn own_keys(t: &Twin, x: &str, arrived: i64) -> Vec<(String, bool, String)> {
 }
 /// THE KEYS THAT SIGN FOR A NODE, each with whether its giver marked it a presence key: every signing node's own (`signing_nodes`)
 pub fn keys_for(t: &Twin, by: &str, arrived: i64) -> Vec<(String, bool)> {
-    signers(t, by, arrived).into_iter().map(|(k, p, _)| (k, p)).collect()
+    signers(t, by, arrived, false).into_iter().map(|(k, p, _)| (k, p)).collect()
 }
-fn signers(t: &Twin, by: &str, arrived: i64) -> Vec<(String, bool, String)> {
-    signing_nodes(t, by).iter().flat_map(|x| own_keys(t, x, arrived)).collect()
+fn signers(t: &Twin, by: &str, arrived: i64, undo: bool) -> Vec<(String, bool, String)> {
+    signing_nodes(t, by, undo).iter().flat_map(|x| own_keys(t, x, arrived)).collect()
 }
 /// IDENTITY: the entry is from its node — or why not; and whether a person was there when it was signed
 pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<Signed, String> {
@@ -181,7 +183,7 @@ pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<Signed, String> {
     let keys = match parse_id(&e["refs"]["proof"]).filter(|_| e["is"] == "takeover") {
         Some(p) if t.takeover_granted(&by, &p, arrived) => own_keys(t, &p, arrived),
         Some(p) => return Err(format!("{p} is not a way back {by} granted")),
-        None => signers(t, &by, arrived),
+        None => signers(t, &by, arrived, matches!(e["is"].as_str(), Some("restore" | "purge"))),
     };
     // A PERSON'S FIRST KEY: nobody is above them and nothing knows them yet — signed with a key it names (whether they may come to be
     // is the twin's, `admit`); unsigned only at the record's very beginning, where nothing can be asked of it yet
@@ -212,7 +214,13 @@ pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<Signed, String> {
         .cloned()
         .or((first && e["value"]["keys"].as_array().is_some_and(|ks| ks.iter().any(|x| x["key"] == k.as_str()))).then(|| (k.clone(), false, by.clone())))
     else {
-        return Err(format!("that key does not sign for {by}"));
+        // A KEY OF A NODE BLOCKED OR DELETED, said as that
+        let held = t.chain(&by).into_iter().find(|x| t.nodes.get(x).and_then(|n| n.who.get("keys")).and_then(Value::as_array).is_some_and(|ks| ks.iter().any(|y| y["key"] == k.as_str())));
+        return Err(match held {
+            Some(x) if t.blocked(&x) => format!("{x} is blocked: its key signs nothing from then on"),
+            Some(x) if t.deleted(&x) => format!("{x} is deleted: its key signs nothing"),
+            _ => format!("that key does not sign for {by}"),
+        });
     };
     let mut v = VERIFIED.lock().unwrap();
     let v = v.get_or_insert_with(BTreeMap::new);

@@ -126,7 +126,7 @@ pub struct Twin {
     pub(crate) erased: OrdSet<String>,
     /// WHO SIGNED EACH ENTRY, as admission found it (`identity::Signed`): the node whose key it was
     pub(crate) signers: OrdMap<i64, String>,
-    /// ROWS OWED THEIR ERASING: what stays of each entry a purge erased here, until its keeper replaced the rows (`erasure_kept`)
+    /// ROWS OWED THEIR ERASING: what stays of each entry a purge erased here, until its keeper replaced the rows (`rows_kept`)
     owed: Vector<Value>,
 }
 
@@ -151,6 +151,7 @@ impl Twin {
             }
             from = last + 1;
         }
+        t.read_from_rows();
         t
     }
 }
@@ -196,8 +197,10 @@ fn meets(c: &Value, details: &dyn Fn(&str) -> Map<String, Value>) -> bool {
     let d = details(&id_of(&c["expect"]["at"]));
     has.iter().all(|(k, x)| d.get(k) == Some(x))
 }
-/// WHO A NODE IS, as its details: the keys it signs with, who carries it, what stays when it is deleted — set from above (`from_above`)
-pub const GOVERNING: [&str; 3] = ["keys", "carried_by", "keep_deleted"];
+/// WHO A NODE IS, as its details: the keys it signs with, who carries it, what stays when it is deleted — and, for a whole program,
+/// where it runs (`host`, `user` and `key`: its server and how it is reached; `vm`: its box there; `machine`: which of its sealed
+/// programs runs) — set from above (`from_above`), never by the node itself nor under a grant
+pub const GOVERNING: [&str; 8] = ["keys", "carried_by", "keep_deleted", "host", "user", "key", "vm", "machine"];
 /// A SEAL IS WHOLE: level code — `wasm`, the module's hash; `cwasm`, its ready machine code's hash for each machine; `contract`, what it
 /// was built to; `reach`, what it may call — or a whole program, `program`: its hash for each machine; and nothing else
 fn seal_whole(v: &Value) -> Result<(), String> {
@@ -267,8 +270,10 @@ enum Whose {
 /// WHAT STAYS OF AN ENTRY A PURGE ERASED: its number, where it was and by whom, when it arrived, who it said a node is, and the purge
 /// that erased it (`purged_by`: every copy kept elsewhere — a backup — is replaced after it) — nothing else it said, nor its signature
 pub fn erased_row(e: &Value, purge: &Value) -> Value {
-    // WHO A NODE IS stays (its keys, who carries it, how long its deletions wait): acts elsewhere were signed by it
-    let who: Map<String, Value> = e["value"].as_object().into_iter().flatten().filter(|(k, _)| GOVERNING.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
+    // WHO A NODE IS stays, as the entry decided it when it was taken (a make or a `be`, from above — `may_decide`): acts elsewhere were
+    // signed by it. Any other kind decided no one, whatever it held
+    let decided = matches!(e["is"].as_str(), Some("be" | "make"));
+    let who: Map<String, Value> = e["value"].as_object().into_iter().flatten().filter(|(k, _)| decided && GOVERNING.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
     json!({ "g": e["g"], "by": e["by"], "at": e["at"], "is": "erased", "refs": {}, "value": who, "arrived": e["arrived"], "purged_by": purge["g"] })
 }
 /// WHAT EACH KIND ANSWERS, AND WHOSE ANSWER COUNTS — the one table of it, held at admission, so every answer in the twin is one that
@@ -284,6 +289,8 @@ fn answering(is: &str, of: &str) -> Option<Whose> {
         ("decline", "takeover") => Some(Whose::Node),
         // a person come in by a way in: their first key, answering the join grant that named them
         ("be", "grant") => Some(Whose::As),
+        // AN ANSWER TO WHAT WAS ERASED stands as it was taken: what it answered is gone, never what it said of it
+        (_, "erased") => Some(Whose::Any),
         ("restore" | "purge" | "revoke" | "decline", _) | (_, "delete" | "grant" | "takeover") => None,
         // anything else answering anything else only follows it (a start's word, a step's): it decides nothing, so anyone's counts
         _ => Some(Whose::Any),
@@ -398,7 +405,8 @@ impl Twin {
             .subtree(&id_of(&e["at"]))
             .iter()
             .filter_map(|x| self.nodes.get(x))
-            .flat_map(|n| n.at.iter().copied())
+            // A NODE'S COMING TO BE stays whole — its make, or a person's first key
+            .flat_map(|n| n.at.iter().skip(1).copied())
             // WHAT DECIDED WHO MAY DO WHAT STAYS WHOLE — a node made, a grant and its taking back, a seal, the delete and what answers
             // it: acts elsewhere were taken under them
             .filter(|g| !matches!(self.is(*g), "make" | "delete" | "restore" | "purge" | "erased" | "grant" | "revoke" | "seal"))
@@ -411,9 +419,18 @@ impl Twin {
     pub fn owed_erasure(&self) -> Vec<Value> {
         self.owed.iter().cloned().collect()
     }
-    /// the rows owed their erasing, replaced by the keeper
-    pub fn erasure_kept(&mut self) {
+    /// FOLDED FROM ITS ROWS: what it read is kept already — but what stays of each entry a purge in them erased, owed its erasing, is
+    /// held until the keeper replaced those rows
+    pub(crate) fn read_from_rows(&mut self) {
+        self.entries.rows_kept();
+        for r in self.owed.clone() {
+            self.entries.insert(r["g"].as_i64().expect("an entry's number"), &r);
+        }
+    }
+    /// WHAT THIS TWIN TOOK, KEPT BY ITS KEEPER — its rows and the rows owed their erasing: from now on read from the rows
+    pub fn rows_kept(&mut self) {
         self.owed.clear();
+        self.entries.rows_kept();
     }
     /// THIS TWIN MADE AGAIN with `erased` in place of the entries they stand for: each other entry landing as it was taken
     fn again(&self, erased: &[Value]) -> Twin {
@@ -869,14 +886,14 @@ impl Twin {
                 }
             }
         }
-        // BLOCKED OR DELETED SIGNS NOTHING: neither the node it is written as, nor the node whose key signed it (a carrier, a level above)
-        for x in [&by, &signed.signer] {
-            if self.nodes.contains_key(x) && self.blocked(x) {
-                return Err(json!({ "g": e["g"], "why": format!("{x} is blocked: it signs nothing from then on") }));
-            }
-            if self.nodes.contains_key(x) && self.deleted(x) {
-                return Err(json!({ "g": e["g"], "why": format!("{x} is deleted: it signs nothing") }));
-            }
+        // BLOCKED OR DELETED, NOTHING IS WRITTEN AS IT — but, by whoever deleted, the delete's own undo or carrying out. Who signs for a
+        // node leaves the blocked and deleted out already (`identity::signing_nodes`)
+        let undo = matches!(e["is"].as_str(), Some("restore" | "purge"));
+        if self.nodes.contains_key(&by) && self.blocked(&by) {
+            return Err(json!({ "g": e["g"], "why": format!("{by} is blocked: it signs nothing from then on") }));
+        }
+        if self.nodes.contains_key(&by) && self.deleted(&by) && !undo {
+            return Err(json!({ "g": e["g"], "why": format!("{by} is deleted: it signs nothing but its delete's undo") }));
         }
         // WHO A NODE IS AND WHAT IT RUNS: every door to them (`decides`) through the one test (`may_decide`)
         if let Some(what) = self.decides(e) {

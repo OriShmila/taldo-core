@@ -61,6 +61,9 @@ pub struct Entries {
     /// every entry, when there is no source
     mem: OrdMap<i64, Arc<Value>>,
     source: Option<Arc<dyn Source>>,
+    /// ENTRIES TAKEN AND NOT KEPT AS ROWS YET: read before the rows, never let go, until their keeper kept them (`rows_kept`) — the
+    /// cache at hand is never their only copy
+    pending: OrdMap<i64, Arc<Value>>,
     hand: Mutex<Hand>,
     /// for each number, its entry's kind (an index into `names`, plus one) — 0 when that number is no entry
     kind: Vector<u32>,
@@ -81,6 +84,7 @@ impl Default for Entries {
         Entries {
             mem: OrdMap::new(),
             source: None,
+            pending: OrdMap::new(),
             hand: Mutex::new(Hand::default()),
             kind: Vector::new(),
             names: vec![],
@@ -99,6 +103,7 @@ impl Clone for Entries {
         Entries {
             mem: self.mem.clone(),
             source: self.source.clone(),
+            pending: self.pending.clone(),
             hand: Mutex::new(Hand::default()),
             kind: self.kind.clone(),
             names: self.names.clone(),
@@ -206,10 +211,14 @@ impl Entries {
         assert!(!self.overlay || self.source.is_none() || g > self.rows_to, "an overlay's entry {g} is not above the rows it was made on ({})", self.rows_to);
         let v = Arc::new(e.clone());
         if self.in_rows(g) {
-            self.hand.lock().unwrap_or_else(|x| x.into_inner()).put(g, v);
+            self.pending.insert(g, v);
         } else {
             self.mem.insert(g, v);
         }
+    }
+    /// THE ENTRIES PENDING, KEPT AS ROWS by their keeper (or read from them): from now on read from the rows
+    pub(crate) fn rows_kept(&mut self) {
+        self.pending.clear();
     }
     /// WHETHER `g` IS AN ENTRY taken
     pub fn contains_key(&self, g: &i64) -> bool {
@@ -265,6 +274,9 @@ impl Entries {
         let Some(src) = self.source.as_ref().filter(|_| self.in_rows(*g)) else {
             return self.mem.get(g).cloned();
         };
+        if let Some(v) = self.pending.get(g) {
+            return Some(v.clone());
+        }
         if let Some(v) = self.hand.lock().unwrap_or_else(|x| x.into_inner()).get(*g) {
             return Some(v);
         }

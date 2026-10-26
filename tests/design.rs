@@ -389,6 +389,125 @@ fn a_purge_judges_nothing_again_and_erased_is_written_by_no_one() {
     assert!(t.entries.contains_key(&5) && t.rejected.iter().all(|r| r["g"] == 7), "an act taken under a grant that stays was judged again and lost: {:?}", t.rejected);
     assert!(t.entries.contains_key(&4) && t.entry(4)["is"] == "grant", "the grant it stood on was erased");
     assert_eq!(t.entry(6)["is"], "erased");
-    assert!(t.name("P").is_none() && signs(&t, "P").contains(&public("P")), "what P said stayed, or who P is went");
+    assert!(t.name("P").is_none() && t.nodes["P"].who["keys"][0]["key"] == public("P"), "what P said stayed, or who P is went");
     assert_eq!(t.owed_erasure().iter().map(|r| r["g"].as_i64().unwrap()).collect::<Vec<_>>(), vec![6], "the rows owed their erasing are not what the purge erased");
+}
+
+// ─── THE FOURTH REVIEW'S PROBES (26 Oct): one answer to who signs for a node, for entries and requests alike; what stays of an
+// erased entry decides no one it did not decide; a twin after a purge is the twin its kept rows fold to; whoever deleted itself
+// answers its own delete; where a program runs is set from above ───
+
+const EMPTY: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+#[test]
+fn a_blocked_carrier_asks_as_no_one() {
+    let t = fold(&[
+        first_key(ORI),
+        make(1, ORI, "D", ORI, "device"),
+        act(2, ORI, ORI, "be", json!({}), json!({ "carried_by": ["D"] })),
+        act(3, ORI, "D", "block", json!({}), json!({})),
+    ]);
+    let r = signed_by("D", json!({ "g": 0, "ts": 10, "by": ORI, "at": ORI, "is": "request", "refs": {}, "value": { "method": "GET", "path": "/at", "body": EMPTY } }));
+    assert!(taldo_core::identity::requested_by(&t, &r, "GET", "/at", b"", 10, 60_000, &|_| false).is_err(), "a blocked device asked as the person it carries");
+    assert!(!taldo_core::identity::keys_for(&t, ORI, 10).iter().any(|(k, _)| *k == public("D")), "a blocked device's key still signs for whom it carries");
+}
+
+/// the twin after a purge, and the twin its kept rows fold to: the same — nodes, who each is, what each holds, nothing refused
+fn same_as_its_rows(live: &Twin) {
+    let rows: Vec<Value> = live.entries.iter().map(|(_, e)| (*e).clone()).collect();
+    let again = fold(&rows);
+    assert!(again.rejected.is_empty(), "its kept rows do not fold: {:?}", again.rejected);
+    for (k, n) in &live.nodes {
+        let m = &again.nodes[k];
+        assert_eq!((&n.who, &n.value, &n.accepted), (&m.who, &m.value, &m.accepted), "{k} differs from what its rows fold to");
+    }
+    let open = |t: &Twin| t.entries.of("ask").filter(|(g, _)| t.ask_open(*g)).map(|(g, _)| g).collect::<Vec<_>>();
+    assert_eq!(open(live), open(&again), "the asks open differ from what its rows fold to");
+}
+
+#[test]
+fn what_stays_of_an_erased_entry_decides_no_one_it_did_not() {
+    let mut es = vec![
+        first_key(ORI),
+        act(1, ORI, ORI, "be", json!({}), json!({ "keep_deleted": 10 })),
+        make(2, ORI, "P", ORI, "thing"),
+        make(3, ORI, "Q", ORI, "thing"),
+        act(4, ORI, "P", "grant", json!({}), json!({ "action": "note", "to": "Q" })),
+        act(5, "Q", "P", "note", json!({}), json!({ "keys": [{ "key": public("X") }], "carried_by": ["Q"] })),
+        act(6, "P", "P", "ask", json!({ "about": "P" }), json!({ "label": "go", "moves": [{ "says": "ok", "to": { "x": 1 } }] })),
+        act(7, ORI, "P", "decline", json!({ "re": 6 }), json!({})),
+        act(8, ORI, "P", "delete", json!({}), json!({})),
+    ];
+    let t0 = fold(&es);
+    assert!(t0.rejected.is_empty(), "{:?}", t0.rejected);
+    let sigs: Vec<Value> = t0.erasing(8).iter().map(|g| t0.entry(*g)["sig"]["sig"].clone()).collect();
+    es.push(act(100, ORI, "P", "purge", json!({ "re": 8 }), json!({ "sigs": sigs })));
+    let t = fold(&es);
+    assert!(t.entries.contains_key(&100), "{:?}", t.rejected);
+    assert!(t.nodes["P"].who.get("carried_by").is_none() && t.nodes["P"].who.get("keys").is_some_and(|k| !k.to_string().contains(&public("X"))), "a note, erased, decided who P is: {:?}", t.nodes["P"].who);
+    same_as_its_rows(&t);
+}
+
+#[test]
+fn whoever_deleted_itself_answers_its_own_delete() {
+    let mut es = vec![
+        first_key(ORI),
+        act(1, ORI, ORI, "grant", json!({}), json!({ "action": "join", "as": "Bob" })),
+        signed(json!({ "g": 2, "ts": 2, "arrived": 2, "by": "Bob", "at": "Bob", "is": "be", "refs": { "re": 1 }, "value": { "keys": [{ "key": public("Bob") }], "keep_deleted": 10 } })),
+        act(3, "Bob", "Bob", "say", json!({}), json!({ "says": "hi" })),
+        act(4, "Bob", "Bob", "delete", json!({}), json!({})),
+    ];
+    let mut undone = es.clone();
+    undone.push(act(5, "Bob", "Bob", "restore", json!({ "re": 4 }), json!({})));
+    let t = fold(&undone);
+    assert!(t.entries.contains_key(&5) && !t.deleted("Bob"), "Bob could not undo his own delete: {:?}", t.rejected);
+    let t0 = fold(&es);
+    let sigs: Vec<Value> = t0.erasing(4).iter().map(|g| t0.entry(*g)["sig"]["sig"].clone()).collect();
+    es.push(act(100, "Bob", "Bob", "purge", json!({ "re": 4 }), json!({ "sigs": sigs })));
+    let t = fold(&es);
+    assert!(t.entries.contains_key(&100), "Bob could not carry out his own delete: {:?}", t.rejected);
+    same_as_its_rows(&t);
+}
+
+#[test]
+fn a_purge_in_a_long_kept_record_lands_before_its_row_is_kept() {
+    use taldo_core::seams::Store;
+    let store = std::sync::Arc::new(taldo_core::fakes::FakeStore::default());
+    store.lease("k").unwrap();
+    let mut t = Twin::stored(store.clone());
+    // AS THE KEEPER: landed on a copy, kept as one, then taken
+    let mut keep = |t: &mut Twin, e: Value| {
+        let mut e = e;
+        arrives(&mut e);
+        let s = t.admit(&e, e["arrived"].as_i64().unwrap()).unwrap_or_else(|w| panic!("{w}"));
+        let mut next = t.clone();
+        next.land(&e, &s, e["arrived"].as_i64().unwrap());
+        store.keep("k", std::slice::from_ref(&e), &next.owed_erasure(), &next.snapshot()).unwrap();
+        next.rows_kept();
+        *t = next;
+    };
+    keep(&mut t, first_key(ORI));
+    keep(&mut t, act(1, ORI, ORI, "be", json!({}), json!({ "keep_deleted": 10 })));
+    keep(&mut t, make(2, ORI, "P", ORI, "thing"));
+    for g in 3..5_003 {
+        keep(&mut t, act(g, ORI, "P", "say", json!({}), json!({ "says": format!("line {g}") })));
+    }
+    keep(&mut t, act(5_003, ORI, "P", "delete", json!({}), json!({})));
+    let sigs: Vec<Value> = t.erasing(5_003).iter().map(|g| t.entry(*g)["sig"]["sig"].clone()).collect();
+    let mut purge = act(5_004, ORI, "P", "purge", json!({ "re": 5_003 }), json!({ "sigs": sigs }));
+    purge["arrived"] = json!(6_000);
+    keep(&mut t, purge);
+    assert!(t.entries.contains_key(&5_004) && t.owed_erasure().is_empty());
+    assert_eq!(taldo_core::rows::Source::entry(&*store, 4).unwrap()["is"], "erased", "the store still holds what was erased");
+    assert_eq!(t.entry(4)["is"], "erased");
+    let again = Twin::refold(store.clone());
+    assert!(again.rejected.is_empty() && again.entries.contains_key(&5_004), "the kept rows do not fold again: {:?}", again.rejected.iter().take(3).collect::<Vec<_>>());
+}
+
+#[test]
+fn where_a_program_runs_is_set_from_above() {
+    let es = vec![first_key(ORI), make(1, ORI, "N", ORI, "taldo"), act(2, ORI, "N", "be", json!({}), json!({ "host": "h1", "vm": "a" })), act(3, "N", "N", "be", json!({}), json!({ "host": "elsewhere" }))];
+    let t = fold(&es);
+    assert!(t.entries.contains_key(&2) && !t.entries.contains_key(&3), "a program's node said where it runs itself: {:?}", t.rejected);
+    assert_eq!(t.nodes["N"].who["host"], "h1");
 }
