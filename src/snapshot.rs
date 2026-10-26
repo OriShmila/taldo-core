@@ -163,11 +163,18 @@ impl Twin {
             w.s(x);
         }
         w.u(self.stopped.len() as u64);
-        for (g, (by, l)) in &self.stopped {
+        for (g, (by, row)) in &self.stopped {
             w.i(*g);
             w.i(*by);
+            w.json(row.as_deref().unwrap_or(&Value::Null));
+        }
+        w.u(self.gaps.len() as u64);
+        for (g, (p, l)) in &self.gaps {
+            w.i(*g);
+            w.i(*p);
             w.json(l);
         }
+        w.gs(self.landed.iter());
         let (names, kinds) = self.entries.kinds();
         w.u(names.len() as u64);
         for n in names {
@@ -267,11 +274,19 @@ impl Twin {
         t.present = r.gs()?.into_iter().collect();
         // what was erased, kept in its standard spelling
         t.erased = (0..r.n()?).map(|_| r.s()).collect::<Result<_, _>>()?;
-        // the lines taken out, each with what took it out and what stays of it
+        // the lines taken out, each with what took it out and its row while it is kept; the lines erased, each with its purge and what
+        // stays of it; which of those count
         for _ in 0..r.n()? {
             let g = r.i()?;
-            t.stopped.insert(g, (r.i()?, r.json()?));
+            let by = r.i()?;
+            let row = r.json()?;
+            t.stopped.insert(g, (by, (!row.is_null()).then(|| Arc::new(row))));
         }
+        for _ in 0..r.n()? {
+            let g = r.i()?;
+            t.gaps.insert(g, (r.i()?, r.json()?));
+        }
+        t.landed = r.gs()?.into_iter().collect();
         let names: Vec<String> = (0..r.n()?).map(|_| r.s()).collect::<Result<_, _>>()?;
         let len = r.n()?;
         let mut kinds: Vec<u32> = Vec::with_capacity(len.min(1 << 26));

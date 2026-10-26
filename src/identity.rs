@@ -137,7 +137,8 @@ fn signer(e: &Value) -> Result<(String, bool), String> {
         }
     }
 }
-/// signatures already verified, with what they signed and whether a person was there: each checked once however often a log is folded
+/// signatures already verified, with a hash of what they signed, and whether a person was there: each checked once however often a
+/// log is folded
 static VERIFIED: Mutex<Option<BTreeMap<(String, String), (String, bool)>>> = Mutex::new(None);
 const VERIFIED_AT_MOST: usize = 4_096;
 
@@ -195,9 +196,10 @@ pub fn verify(t: &Twin, e: &Value, arrived: i64) -> Result<Signed, String> {
     if first && e["sig"].is_null() && t.nodes.is_empty() {
         return Ok(Signed { signer: by, present: false });
     }
+    // HELD BY ITS SIGNATURE AND A HASH OF WHAT WAS SIGNED — never the words themselves: what a purge erased is held nowhere
     let seen = (
         e["sig"]["sig"].as_str().unwrap_or("").to_string(),
-        signed_bytes(e),
+        b64hex(&Sha256::digest(signed_bytes(e).as_bytes())),
     );
     let known = VERIFIED
         .lock()

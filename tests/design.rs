@@ -616,9 +616,9 @@ fn a_stop_takes_out_a_line_and_whatever_stood_on_it() {
     assert!(t0.rejected.is_empty() && signs(&t0, ORI).contains(&public("thief")), "{:?}", t0.rejected);
     // WHAT FALLS IS NAMED: the thief's own line stood on the key, and is named with it
     let mut alone = es.clone();
-    alone.push(act(6, ORI, ORI, "stop", json!({}), json!({ "lines": t0.stopping(&[3]) })));
+    alone.push(act(6, ORI, ORI, "take out", json!({}), json!({ "lines": t0.stopping(&[3]) })));
     assert!(t0.admit(&alone[6], 6).is_err_and(|w| w["falls"] == 4), "a stop left what stood on its line refused in the rows");
-    es.push(act(6, ORI, ORI, "stop", json!({}), json!({ "lines": t0.stopping(&[3, 4]) })));
+    es.push(act(6, ORI, ORI, "take out", json!({}), json!({ "lines": t0.stopping(&[3, 4]) })));
     let t = fold(&es);
     assert!(t.entries.contains_key(&6), "{}", why(&t, 6));
     assert!(!t.entries.contains_key(&3) && !t.entries.contains_key(&4), "a line stopped, or what stood on it, still counts");
@@ -647,7 +647,7 @@ fn a_stop_is_set_from_above_and_never_takes_out_a_coming_to_be() {
         act(4, "P", "P", "be", json!({}), json!({ "said": "by P" })),
     ];
     let t0 = fold(&es);
-    let stop = |g: i64, by: &str, at: &str, lines: &[i64]| act(g, by, at, "stop", json!({}), json!({ "lines": t0.stopping(lines) }));
+    let stop = |g: i64, by: &str, at: &str, lines: &[i64]| act(g, by, at, "take out", json!({}), json!({ "lines": t0.stopping(lines) }));
     let with = |e: Value| {
         let mut l = es.clone();
         l.push(e);
@@ -662,7 +662,7 @@ fn a_stop_is_set_from_above_and_never_takes_out_a_coming_to_be() {
     // WHAT A STOP SAYS STAYS IS THE LINE: one that says otherwise is not taken
     let mut lying = t0.stopping(&[4]);
     lying[0]["by"] = json!(ORI);
-    assert!(!with(act(10, ORI, "P", "stop", json!({}), json!({ "lines": lying }))).entries.contains_key(&10), "a stop said a line was someone else's");
+    assert!(!with(act(10, ORI, "P", "take out", json!({}), json!({ "lines": lying }))).entries.contains_key(&10), "a stop said a line was someone else's");
 }
 
 #[test]
@@ -670,7 +670,7 @@ fn a_stop_not_taken_stops_nothing() {
     // a stop written into the rows by hand, signed by no one: it is judged in its place, and what it names counts as ever
     let es = vec![first_key(ORI), make(1, ORI, "P", ORI, "thing"), act(2, ORI, "P", "be", json!({}), json!({ "name": "Pat" }))];
     let t0 = fold(&es);
-    let mut forged = act(3, ORI, "P", "stop", json!({}), json!({ "lines": t0.stopping(&[2]) }));
+    let mut forged = act(3, ORI, "P", "take out", json!({}), json!({ "lines": t0.stopping(&[2]) }));
     forged["sig"]["sig"] = json!("00".repeat(64));
     let mut l = es.clone();
     l.push(forged);
@@ -692,4 +692,151 @@ fn nothing_answers_a_line_once_it_is_taken_out() {
     es.push(act(101, ORI, ORI, "decline", json!({ "re": 3 }), json!({})));
     let t = fold(&es);
     assert!(t.entries.contains_key(&100) && !t.entries.contains_key(&101), "an erased line was answered after it was erased");
+}
+
+// ─── THE SEVENTH REVIEW'S PROBES (26 Oct): one rule judges a line that takes others out, when it arrives and in every fold; the core's
+// kinds are its own; a purge erases what was taken out too; what stays of an erased line stands only on what it stood on ───
+
+/// AS THE KEEPER: each line admitted, landed on a copy, kept with the rows a purge erased forgotten — and the record folded again from
+/// what the store holds is the same twin
+fn kept_in(store: &std::sync::Arc<taldo_core::fakes::FakeStore>, t: &mut Twin, mut e: Value) -> Result<(), Value> {
+    use taldo_core::seams::Store;
+    arrives(&mut e);
+    let a = e["arrived"].as_i64().unwrap();
+    let s = t.admit(&e, a)?;
+    let mut next = t.clone();
+    next.land(&e, &s, a);
+    store.keep("k", &[taldo_core::twin::kept(&e, a)], &Twin::forgets(&e), &next.snapshot()).unwrap();
+    next.rows_kept();
+    *t = next;
+    Ok(())
+}
+fn same_after_restart(store: &std::sync::Arc<taldo_core::fakes::FakeStore>, live: &Twin) {
+    let again = Twin::refold(store.clone());
+    assert!(again.rejected.is_empty(), "the kept rows do not fold again: {:?}", again.rejected);
+    assert_eq!(live.entries.keys().collect::<Vec<_>>(), again.entries.keys().collect::<Vec<_>>(), "a restart counts other lines");
+    for (k, n) in &live.nodes {
+        assert_eq!((&n.who, &n.value), (&again.nodes[k].who, &again.nodes[k].value), "{k} differs after a restart");
+    }
+}
+
+#[test]
+fn a_programs_own_kind_is_never_read_as_the_cores() {
+    assert!(taldo_core::twin::core_kind("take out") && taldo_core::twin::core_kind("purge"));
+    assert!(!taldo_core::twin::core_kind("stop"), "the app's stop of a session is a core kind");
+    let t = with(&[act(10, ORI, ENGINE, "stop", json!({}), json!({}))]);
+    assert!(taken(&t, 10), "a session's stop was read as the core's: {}", why(&t, 10));
+}
+
+#[test]
+fn every_take_out_and_purge_after_one_is_judged_alike_live_and_after_a_restart() {
+    let store = std::sync::Arc::new(taldo_core::fakes::FakeStore::default());
+    taldo_core::seams::Store::lease(&*store, "k").unwrap();
+    let mut t = Twin::stored(store.clone());
+    for e in [
+        first_key(ORI),
+        act(1, ORI, ORI, "be", json!({}), json!({ "keep_deleted": 10 })),
+        make(2, ORI, "P", ORI, "thing"),
+        make(3, ORI, "Q", ORI, "thing"),
+        act(4, ORI, "P", "be", json!({}), json!({ "name": "bad" })),
+        act(5, ORI, "Q", "be", json!({}), json!({ "name": "also bad" })),
+        act(6, ORI, "Q", "say", json!({}), json!({ "secret": "medical record" })),
+    ] {
+        kept_in(&store, &mut t, e).unwrap();
+    }
+    let out = act(7, ORI, "P", "take out", json!({}), json!({ "lines": t.stopping(&[4]) }));
+    kept_in(&store, &mut t, out).unwrap();
+    let out = act(8, ORI, "Q", "take out", json!({}), json!({ "lines": t.stopping(&[5]) }));
+    kept_in(&store, &mut t, out).unwrap_or_else(|w| panic!("a second take-out was refused: {w}"));
+    assert!(t.name("P").is_none() && t.name("Q").is_none());
+    same_after_restart(&store, &t);
+    // A PURGE AFTER TAKE-OUTS: Q deleted, then erased — the line taken out at Q too, its words forgotten by the store
+    kept_in(&store, &mut t, act(9, ORI, "Q", "delete", json!({}), json!({}))).unwrap();
+    let lines = t.purging(9);
+    assert_eq!(lines.iter().map(|l| l["g"].as_i64().unwrap()).collect::<Vec<_>>(), vec![5, 6], "the purge does not erase the line taken out");
+    let mut purge = act(10, ORI, "Q", "purge", json!({ "re": 9 }), json!({ "lines": lines }));
+    purge["arrived"] = json!(100);
+    kept_in(&store, &mut t, purge).unwrap_or_else(|w| panic!("a purge after a take-out was refused: {w}"));
+    for g in [5, 6] {
+        assert!(taldo_core::rows::Source::entry(&*store, g).is_none(), "row {g} still holds what was said");
+    }
+    same_after_restart(&store, &t);
+}
+
+#[test]
+fn a_purge_names_only_lines_before_it_and_under_its_delete_in_every_fold() {
+    let mut es = vec![
+        first_key(ORI),
+        act(1, ORI, ORI, "be", json!({}), json!({ "keep_deleted": 10 })),
+        make(2, ORI, "P", ORI, "thing"),
+        make(3, ORI, "Q", ORI, "thing"),
+        act(4, ORI, "P", "say", json!({}), json!({ "x": 1 })),
+        act(5, ORI, "P", "delete", json!({}), json!({})),
+    ];
+    let t0 = fold(&es);
+    let mut lines = t0.purging(5);
+    // the purge also names a line after it, at Q, outside what was deleted
+    let rename = act(20, ORI, "Q", "be", json!({}), json!({ "name": "Quinn" }));
+    let mut said = json!({ "g": 20, "by": ORI, "at": "P", "is": "be", "sig": rename["sig"]["sig"], "who": {} });
+    lines.push(said.take());
+    let mut purge = act(10, ORI, "P", "purge", json!({ "re": 5 }), json!({ "lines": lines }));
+    purge["arrived"] = json!(100);
+    es.push(purge);
+    es.push(rename);
+    let t = fold(&es);
+    assert!(!taken(&t, 10) && taken(&t, 20) && t.name("Q").as_deref() == Some("Quinn"), "a purge took out a line after it, outside its delete");
+}
+
+#[test]
+fn a_row_no_one_signed_never_decides_what_a_fold_passes_over() {
+    let store = std::sync::Arc::new(taldo_core::fakes::FakeStore::default());
+    taldo_core::seams::Store::lease(&*store, "k").unwrap();
+    let mut t = Twin::stored(store.clone());
+    for e in [
+        first_key(ORI),
+        act(1, ORI, ORI, "be", json!({}), json!({ "keep_deleted": 10 })),
+        make(2, ORI, "P", ORI, "thing"),
+        make(3, ORI, "Q", ORI, "thing"),
+        act(4, ORI, "P", "be", json!({}), json!({ "keys": [{ "key": public("P2") }] })),
+        act(5, ORI, ORI, "grant", json!({}), json!({ "action": "note", "to": "P" })),
+        signed_by("P2", json!({ "g": 6, "ts": 6, "arrived": 6, "by": "P", "at": ORI, "is": "note", "refs": {}, "value": { "x": 1 } })),
+        act(7, ORI, "P", "delete", json!({}), json!({})),
+    ] {
+        kept_in(&store, &mut t, e).unwrap();
+    }
+    let mut purge = act(9, ORI, "P", "purge", json!({ "re": 7 }), json!({ "lines": t.purging(7) }));
+    purge["arrived"] = json!(100);
+    kept_in(&store, &mut t, purge).unwrap();
+    assert!(taken(&t, 6), "a note signed with an erased line's key fell");
+    same_after_restart(&store, &t);
+    // A JUNK ROW, signed by no one, claiming the erased line before the purge does
+    let mut rows: Vec<Value> = taldo_core::rows::Source::page(&*store, 0, i64::MAX, false, 100).into_iter().map(|(_, e)| e).collect();
+    rows.insert(rows.iter().position(|e| e["g"] == 9).unwrap(), json!({ "g": 8, "ts": 8, "arrived": 8, "by": ORI, "at": "P", "is": "purge", "refs": { "re": 7 }, "value": { "lines": [{ "g": 4, "by": ORI, "at": "P", "is": "be", "sig": null, "who": {} }] } }));
+    let f = fold(&rows);
+    assert!(taken(&f, 9) && taken(&f, 6) && !taken(&f, 8), "a row no one signed decided what the fold passed over: {:?}", f.rejected);
+}
+
+#[test]
+fn what_an_erased_line_said_stands_only_on_what_it_stood_on() {
+    // a thief's key on Ori signs a line saying who B is; B is deleted and erased; the thief's key line is then taken out
+    let mut es = vec![
+        first_key(ORI),
+        act(1, ORI, ORI, "be", json!({}), json!({ "keep_deleted": 10 })),
+        make(2, ORI, "B", ORI, "thing"),
+        act(3, ORI, ORI, "be", json!({}), json!({ "keys": [{ "key": public(ORI) }, { "key": public("thief") }] })),
+        signed_by("thief", json!({ "g": 4, "ts": 4, "arrived": 4, "by": ORI, "at": "B", "is": "be", "refs": {}, "value": { "keys": [{ "key": public("thiefB") }] } })),
+        act(5, ORI, "B", "delete", json!({}), json!({})),
+    ];
+    let t0 = fold(&es);
+    let mut purge = act(6, ORI, "B", "purge", json!({ "re": 5 }), json!({ "lines": t0.purging(5) }));
+    purge["arrived"] = json!(100);
+    es.push(purge);
+    let t1 = fold(&es);
+    let b_keys = |t: &Twin| t.nodes["B"].who["keys"].to_string();
+    assert!(taken(&t1, 6) && b_keys(&t1).contains(&public("thiefB")), "{:?}", t1.rejected);
+    let alone = act(7, ORI, ORI, "take out", json!({}), json!({ "lines": t1.stopping(&[3]) }));
+    assert!(t1.admit(&alone, 7).is_err_and(|w| w["falls"] == 4), "taking out the thief's key left what an erased line it signed said");
+    es.push(act(7, ORI, ORI, "take out", json!({}), json!({ "lines": t1.stopping(&[3, 4]) })));
+    let t = fold(&es);
+    assert!(taken(&t, 7) && !b_keys(&t).contains(&public("thiefB")), "{}", why(&t, 7));
 }
