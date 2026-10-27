@@ -123,7 +123,7 @@ pub fn keep(store: &taldo_core::fakes::FakeStore, t: &mut taldo_core::twin::Twin
 }
 /// TALDO'S WORD OF WHERE THE RECORD IS, signed — as its keeper keeps it outside the store
 pub fn anchor_of(t: &taldo_core::twin::Twin, state: &[u8]) -> Value {
-    let mut a = t.anchor(state);
+    let mut a = t.anchor(state, false);
     a["sig"] = mark_sign(taldo_core::rows::canonical_of(&a).as_bytes()).unwrap();
     a
 }

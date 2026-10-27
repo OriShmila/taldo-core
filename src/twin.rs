@@ -569,6 +569,24 @@ impl Twin {
         assert!(crate::rows::row_hash(&row) == o.hash, "row {g} of the record is not the row Taldo took out: it was changed in the store");
         Some(Arc::new(row))
     }
+    /// EVERY LINE AN ACT TAKES OUT OR BRINGS BACK, as it was taken — the one answer to what an act undoes: the lines a take-out names,
+    /// and every line a take-out among them names in turn (taking out a take-out brings its lines back), at any depth — taken out or not
+    pub fn lines_changed(&self, e: &Value) -> Vec<Arc<Value>> {
+        let mut out = vec![];
+        let mut todo = if e["is"] == "take out" { Self::lines_named(e) } else { vec![] };
+        let mut seen = BTreeSet::new();
+        while let Some(g) = todo.pop() {
+            if !seen.insert(g) {
+                continue;
+            }
+            let Some(l) = self.line_row(g) else { continue };
+            if l["is"] == "take out" {
+                todo.extend(Self::lines_named(&l));
+            }
+            out.push(l);
+        }
+        out
+    }
     /// THE RECORD'S TALDO — the one that marks it: the first node of kind taldo made under the record's first person
     pub fn record_taldo(&self) -> Option<String> {
         let first = |n: &&Node| n.at.front().copied().unwrap_or(i64::MAX);
@@ -584,18 +602,19 @@ impl Twin {
     fn marks_with(&self, k: &str) -> bool {
         self.marking_keys().iter().any(|x| x == k)
     }
-    /// WHERE THE RECORD IS: its last line, its last mark's hash and its state's hash — what Taldo signs and keeps outside the store
-    /// (`anchored`), so a record cut short, put back or changed is never read
-    pub fn anchor(&self, state: &[u8]) -> Value {
+    /// WHERE THE RECORD IS: its last line, its last mark's hash and its state's hash — and whether it is where the record's first keep
+    /// leaves it (`first`) — what Taldo signs and keeps outside the store (`anchored`), so a record cut short, put back or changed is
+    /// never read
+    pub fn anchor(&self, state: &[u8], first: bool) -> Value {
         use sha2::{Digest, Sha256};
-        json!({ "g": self.last, "head": self.head, "state": Sha256::digest(state).iter().map(|b| format!("{b:02x}")).collect::<String>() })
+        json!({ "g": self.last, "head": self.head, "state": Sha256::digest(state).iter().map(|b| format!("{b:02x}")).collect::<String>(), "first": first })
     }
     /// WHETHER THE RECORD READ IS WHERE TALDO LAST LEFT IT: `anchor` is Taldo's signed word of it (`{ g, head, state, sig }`), signed
     /// by a key that marks the record now — or why not
     pub fn anchored(&self, state: &[u8], anchor: &Value) -> Result<(), String> {
         let mut said = anchor.clone();
         let sig = said.as_object_mut().and_then(|o| o.remove("sig")).ok_or("the anchor is not signed")?;
-        if said != self.anchor(state) {
+        if said != self.anchor(state, said["first"] == true) {
             return Err(format!("the record is not where Taldo last left it: it is at #{} ({}), Taldo left it at #{} ({})", self.last, self.head, said["g"], said["head"]));
         }
         if !self.marks_with(sig["key"].as_str().unwrap_or("")) {

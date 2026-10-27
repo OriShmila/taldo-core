@@ -816,7 +816,7 @@ fn the_record_is_read_only_where_taldo_last_left_it() {
     changed[last] ^= 1;
     assert!(again.anchored(&changed, &anchor).is_err(), "a changed state was read as Taldo's");
     // AN ANCHOR SIGNED BY ANOTHER KEY
-    let mut forged = t.anchor(&state_of(&store));
+    let mut forged = t.anchor(&state_of(&store), false);
     forged["sig"] = {
         use p256::ecdsa::signature::Signer;
         let s: p256::ecdsa::Signature = key_of("thief").sign(taldo_core::rows::canonical_of(&forged).as_bytes());
@@ -886,6 +886,9 @@ fn a_line_taken_out_by_many_is_out_while_any_counts() {
     let t = fold(&lines);
     assert!(t.rejected.is_empty(), "{:?}", t.rejected);
     assert_eq!(t.name(ORI), None, "a line taken out by two take-outs in force came back");
+    // WHAT AN ACT UNDOES, at any depth: taking out #6 brings back #4's take-out of #3, and so #3's of #2
+    let undoes: Vec<i64> = t.lines_changed(&act(7, ORI, ORI, "take out", json!({}), json!({ "lines": [6] }))).iter().map(|l| l["g"].as_i64().unwrap()).collect();
+    assert!([6, 4, 3, 2].iter().all(|g| undoes.contains(g)), "what a take-out of a take-out undoes was not said whole: {undoes:?}");
     let (store, t) = kept_record(lines);
     assert_eq!(t.name(ORI), None);
     same_after_restart(&store, &t);
