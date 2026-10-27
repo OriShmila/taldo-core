@@ -61,6 +61,8 @@ fn a_deleted_node_is_hidden_at_once_and_comes_back_when_undone() {
     assert!(t.deleted("form") && t.deleted("dana") && !t.deleted("taxorg"));
     assert!(!taken(&t, 23), "an act landed under a deleted node");
     assert!(!t.ask_open(21), "a stage about a deleted node is still asked");
+    // CLOSED, IT SAYS WHY: whoever asked is told, never left waiting
+    assert_eq!(t.closed_why(21).as_deref(), Some("case was deleted"));
     // undone, with a person there: back, whole
     log.pop();
     log.push(common::touched(json!({ "g": 23, "ts": 23, "arrived": 23, "by": "taxowner", "at": "dana", "is": "restore", "refs": { "re": 22 }, "value": {} })));
@@ -111,4 +113,20 @@ fn only_who_deleted_undoes_it() {
     let own = common::touched(json!({ "g": 21, "ts": 21, "arrived": 21, "by": "taxowner", "at": "case", "is": "restore", "refs": { "re": 20 }, "value": {} }));
     let t = with(&[keep(19), delete(20, 20, "case"), own]);
     assert!(taken(&t, 21) && !t.deleted("case"), "who deleted it could not bring it back: {}", why(&t, 21));
+}
+
+// WHAT KEPT AN ASK TRUE NO LONGER HOLDS: its `while` (details its thing must have) is read by the core — closed and owed to no one,
+// and it says why; an ask whose thing moved, or was declined, says that
+#[test]
+fn an_ask_is_open_only_while_what_keeps_it_true_holds() {
+    let ask = act(21, "taxorg", "taxorg", "ask", json!({ "about": "case" }), json!({ "label": "intake", "says": "intake?", "moves": [{ "says": "Done", "to": { "intake": "done" } }], "while": { "stage": "intake" } }));
+    let at_intake = act(20, "taxorg", "case", "be", json!({}), json!({ "stage": "intake" }));
+    let t = with(&[at_intake.clone(), ask.clone()]);
+    assert!(t.ask_open(21) && t.closed_why(21).is_none());
+    let t = with(&[at_intake.clone(), ask.clone(), act(22, "taxorg", "case", "be", json!({}), json!({ "stage": "calculation" }))]);
+    assert!(!t.ask_open(21), "an ask whose reason ended is still open");
+    assert_eq!(t.closed_why(21).as_deref(), Some("what kept it true no longer holds"));
+    assert!(t.asks_for("taxowner").iter().chain(t.asks_for("taxorg").iter()).all(|(g, _)| *g != 21), "an ask whose reason ended is still owed");
+    let t = with(&[at_intake, ask, common::touched(json!({ "g": 22, "ts": 22, "arrived": 22, "by": "taxowner", "at": "case", "is": "decline", "refs": { "re": 21 }, "value": { "says": "not this year" } }))]);
+    assert_eq!(t.closed_why(21).as_deref(), Some("declined: not this year"));
 }

@@ -33,7 +33,9 @@
 //! A DECISION IS A THING MOVING. What a level needs from above it is an ASK: written by the asker at itself, about a thing (`refs.about`),
 //! with a `label` and the moves that would settle it (`moves`: each `{ says, to }`, `to` the details the thing would then have). It is
 //! HELD — open, and owed to its holder — until the thing has, as accepted, every detail of one of its moves (after the ask), or its
-//! holder declines it (`decline`, `re` it). An answer is not the end; the move is.
+//! holder declines it (`decline`, `re` it), or its thing is deleted, or what kept it true no longer holds (`while`: details its thing
+//! must have, as accepted — none said, it holds while open). An answer is not the end; the move is. Closed, it says why
+//! (`closed_why`), so whoever asked is told — never left waiting on an ask nobody holds.
 //!   ONE ASK PER THING AND LABEL: an ask about a thing, with a label, while one like it is open, is evidence on that one — never a
 //!   second decision.
 //!   WHO HOLDS IT is read from the tree, never from code: a FLOW — a node's detail `flow:<label>`, so setting one is a move like any
@@ -1739,10 +1741,27 @@ impl Twin {
         // by its holder, or a level above it — you are above every hand: the only no an ask takes (`answering`)
         self.answers.get(&g).is_some_and(|a| a.iter().any(|x| self.is(*x) == "decline"))
     }
-    /// AN ASK IS OPEN until its thing moved or its holder declined it — and an ask that is evidence on another is never open itself
+    /// AN ASK IS OPEN until it is closed (`closed_why`) — and an ask that is evidence on another is never open itself
     pub fn ask_open(&self, g: i64) -> bool {
-        self.row(g).is_some_and(|r| r.joins.is_none() && r.moved.is_none() && !r.declined)
-            && self.ask_of(g).is_some_and(|(about, _, _)| !self.deleted(&about))
+        self.row(g).is_some_and(|r| r.joins.is_none()) && self.closed_why(g).is_none()
+    }
+    /// WHY AN ASK IS NO LONGER OPEN — none while it is: its thing moved, its holder declined it (with their words), its thing was
+    /// deleted, or what kept it true (`while`) no longer holds. The one answer to it: whoever asked is told, never left waiting
+    pub fn closed_why(&self, g: i64) -> Option<String> {
+        let (about, _, _) = self.ask_of(g)?;
+        let r = self.row(g)?;
+        if r.moved.is_some() {
+            return Some("moved".into());
+        }
+        if r.declined {
+            let words = self.answers.get(&g).into_iter().flatten().find(|x| self.is(**x) == "decline").and_then(|x| self.e(*x)["value"]["says"].as_str().filter(|s| !s.trim().is_empty()).map(String::from));
+            return Some(words.map_or_else(|| "declined".to_string(), |w| format!("declined: {w}")));
+        }
+        if self.deleted(&about) {
+            return Some(format!("{about} was deleted"));
+        }
+        let holds = self.e(g)["value"]["while"].as_object().is_none_or(|w| self.nodes.get(&about).is_some_and(|n| w.iter().all(|(k, v)| n.accepted.get(k) == Some(v))));
+        (!holds).then(|| "what kept it true no longer holds".into())
     }
     /// WHERE AN ASK'S MOVES LAND: the places its acts would move — two asks about one thing are one question only if they land alike
     fn lands(&self, g: i64) -> Vec<Value> {
