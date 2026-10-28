@@ -367,14 +367,16 @@ pub trait Identity {
 
 // ─── AGENT: a session of an agent at work ───
 
-/// WHAT A SESSION DID, as its runtime told it: what it said, a step it took (a tool, with what it was given), its turn ended, or it
-/// ended
+/// WHAT A SESSION DID, as its runtime told it: what it said, a step it took (a tool, with what it was given), its turn ended (and what
+/// it cost, when the runtime says), or it ended
 #[derive(Debug, Clone, PartialEq)]
 pub enum Heard {
     Said(String),
     Step { tool: String, says: String },
     TurnEnded,
     Ended(String),
+    /// WHAT A TURN COST, as its runtime said at its end: in US dollars, and how long it took
+    Spent { usd: f64, ms: u64 },
 }
 /// what hears a session, as it happens: the session's id and what it did
 pub type Hear = std::sync::Arc<dyn Fn(&str, Heard) + Send + Sync>;
