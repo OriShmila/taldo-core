@@ -130,3 +130,17 @@ fn an_ask_is_open_only_while_what_keeps_it_true_holds() {
     let t = with(&[at_intake, ask, common::touched(json!({ "g": 22, "ts": 22, "arrived": 22, "by": "taxowner", "at": "case", "is": "decline", "refs": { "re": 21 }, "value": { "says": "not this year" } }))]);
     assert_eq!(t.closed_why(21).as_deref(), Some("declined: not this year"));
 }
+
+// AN ASK WHOSE REASON ENDED IS OVER (29 Oct): one raised after it, like it, stands on its own — never evidence on the one that ended,
+// so its thing is never left with no ask open
+#[test]
+fn an_ask_raised_after_one_whose_reason_ended_stands_on_its_own() {
+    let ask = |g: i64, says: &str, stage: &str| act(g, "taxorg", "taxorg", "ask", json!({ "about": "case" }), json!({ "label": "intake", "says": says, "moves": [{ "says": "Done", "to": { "intake": "done" } }], "while": { "stage": stage } }));
+    let t = with(&[act(20, "taxorg", "case", "be", json!({}), json!({ "stage": "intake" })), ask(21, "intake?", "intake"), act(22, "taxorg", "case", "be", json!({}), json!({ "stage": "again" })), ask(23, "intake, again?", "again")]);
+    assert!(!t.ask_open(21), "the ask whose reason ended is still open");
+    assert!(t.joins(23).is_none(), "the new ask was taken as evidence on the one that ended");
+    assert!(t.ask_open(23), "the new ask is not open");
+    // while the first one's reason holds, one like it is evidence on it, as ever
+    let t = with(&[act(20, "taxorg", "case", "be", json!({}), json!({ "stage": "intake" })), ask(21, "intake?", "intake"), ask(22, "intake, again?", "intake")]);
+    assert_eq!(t.joins(22), Some(21));
+}

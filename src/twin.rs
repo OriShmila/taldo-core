@@ -1760,8 +1760,12 @@ impl Twin {
         if self.deleted(&about) {
             return Some(format!("{about} was deleted"));
         }
-        let holds = self.e(g)["value"]["while"].as_object().is_none_or(|w| self.nodes.get(&about).is_some_and(|n| w.iter().all(|(k, v)| n.accepted.get(k) == Some(v))));
-        (!holds).then(|| "what kept it true no longer holds".into())
+        self.reason_ended(g).then(|| "what kept it true no longer holds".into())
+    }
+    /// WHAT KEPT AN ASK TRUE HAS ENDED: its `while`, the details its thing must have as accepted, no longer all there
+    fn reason_ended(&self, g: i64) -> bool {
+        let Some((about, _, _)) = self.ask_of(g) else { return false };
+        !self.e(g)["value"]["while"].as_object().is_none_or(|w| self.nodes.get(&about).is_some_and(|n| w.iter().all(|(k, v)| n.accepted.get(k) == Some(v))))
     }
     /// WHERE AN ASK'S MOVES LAND: the places its acts would move — two asks about one thing are one question only if they land alike
     fn lands(&self, g: i64) -> Vec<Value> {
@@ -1804,10 +1808,11 @@ impl Twin {
         let moved = self.moved_by(x, &holder);
         let declined = self.declined(x);
         let lands = self.lands(x);
-        // THE ASK IT IS EVIDENCE ON: an earlier one like it, landing alike, itself no evidence, open when this one was raised
+        // THE ASK IT IS EVIDENCE ON: an earlier one like it, landing alike, itself no evidence, open when this one was raised — never
+        // one whose reason ended (its `while` no longer holds): that one is over, and this one stands on its own
         let joins = before
             .iter()
-            .filter(|y| y.lands == lands && y.joins.is_none())
+            .filter(|y| y.lands == lands && y.joins.is_none() && !self.reason_ended(y.g))
             .find(|y| y.moved.map_or(true, |m| m > x) && !y.declined)
             .map(|y| y.g);
         Row { g: x, holder, moved, declined, lands, joins }
